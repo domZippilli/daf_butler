@@ -1,4 +1,3 @@
-
 _daf_butler_cli:
 
 The Butler Command
