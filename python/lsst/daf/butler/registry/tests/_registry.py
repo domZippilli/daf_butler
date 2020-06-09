@@ -198,7 +198,7 @@ class RegistryTests(ABC):
             registry.expandDataId(
                 instrument="DummyCam",
                 graph=dimension.graph
-            ).records[dimensionName].toDict(),
+            ).record(dimensionName).toDict(),
             dimensionValue
         )
         # expandDataId should raise if there is no record with the given ID.
@@ -221,7 +221,7 @@ class RegistryTests(ABC):
             registry.expandDataId(
                 instrument="DummyCam", physical_filter="DummyCam_i",
                 graph=dimension2.graph
-            ).records[dimensionName2].toDict(),
+            ).record(dimensionName2).toDict(),
             dimensionValue2
         )
         # Use syncDimensionData to insert a new record successfully.
@@ -581,7 +581,7 @@ class RegistryTests(ABC):
                 registry.insertDimensionData("instrument", {"name": "Cam2"})
                 raise ValueError("Oops, something went wrong")
         # Cam1 should exist
-        self.assertEqual(registry.expandDataId(instrument="Cam1").records["instrument"].class_name, "A")
+        self.assertEqual(registry.expandDataId(instrument="Cam1").record("instrument").class_name, "A")
         # But Cam2 and Cam3 should both not exist
         with self.assertRaises(LookupError):
             registry.expandDataId(instrument="Cam2")
@@ -715,7 +715,8 @@ class RegistryTests(ABC):
         rows = list(registry.queryDimensions(dimensions, datasets=rawType, collections=run1, expand=True))
         self.assertEqual(len(rows), 4*3)   # 4 exposures times 3 detectors
         for dataId in rows:
-            self.assertCountEqual(dataId.keys(), ("instrument", "detector", "exposure", "visit"))
+            self.assertCountEqual(dataId.keys(), ("instrument", "detector", "exposure", "visit",
+                                                  "physical_filter", "abstract_filter", "visit_system"))
             packer1 = registry.dimensions.makePacker("visit_detector", dataId)
             packer2 = registry.dimensions.makePacker("exposure_detector", dataId)
             self.assertEqual(packer1.unpack(packer1.pack(dataId)),
@@ -732,7 +733,8 @@ class RegistryTests(ABC):
         rows = list(registry.queryDimensions(dimensions, datasets=rawType, collections=tagged2))
         self.assertEqual(len(rows), 4*3)   # 4 exposures times 3 detectors
         for dataId in rows:
-            self.assertCountEqual(dataId.keys(), ("instrument", "detector", "exposure", "visit"))
+            self.assertCountEqual(dataId.keys(), ("instrument", "detector", "exposure", "visit",
+                                                  "physical_filter", "abstract_filter", "visit_system"))
         self.assertCountEqual(set(dataId["exposure"] for dataId in rows),
                               (100, 101, 200, 201))
         self.assertCountEqual(set(dataId["visit"] for dataId in rows), (10, 20))
@@ -742,7 +744,8 @@ class RegistryTests(ABC):
         rows = list(registry.queryDimensions(dimensions, datasets=rawType, collections=[run1, tagged2]))
         self.assertEqual(len(set(rows)), 6*3)   # 6 exposures times 3 detectors; set needed to de-dupe
         for dataId in rows:
-            self.assertCountEqual(dataId.keys(), ("instrument", "detector", "exposure", "visit"))
+            self.assertCountEqual(dataId.keys(), ("instrument", "detector", "exposure", "visit",
+                                                  "physical_filter", "abstract_filter", "visit_system"))
         self.assertCountEqual(set(dataId["exposure"] for dataId in rows),
                               (100, 101, 110, 111, 200, 201))
         self.assertCountEqual(set(dataId["visit"] for dataId in rows), (10, 11, 20))

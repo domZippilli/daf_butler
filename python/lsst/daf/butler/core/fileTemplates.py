@@ -44,7 +44,7 @@ from typing import (
 from .config import Config
 from .configSupport import processLookupConfigs, LookupKey
 from .exceptions import ValidationError
-from .dimensions import SkyPixDimension, DataCoordinate
+from .dimensions import SkyPixDimension, CompleteDataCoordinate, DataCoordinate, ExpandedDataCoordinate
 
 if TYPE_CHECKING:
     from .dimensions import DimensionUniverse
@@ -430,30 +430,35 @@ class FileTemplate:
             not optional.  Or, `component` is specified but "component" was
             not part of the template.
         """
-        # Extract defined non-None dimensions from the dataId
-        # We attempt to get the "full" dict on the assumption that ref.dataId
-        # is a ExpandedDataCoordinate, as it should be when running
-        # PipelineTasks.  We should probably just require that when formatting
-        # templates (and possibly when constructing DatasetRefs), but doing so
-        # would break a ton of otherwise-useful tests that would need to be
-        # modified to provide a lot more metadata.
-        fields = {k: v for k, v in getattr(ref.dataId, "full", ref.dataId).items() if v is not None}
-
-        if isinstance(ref.dataId, DataCoordinate):
+        extras = {}
+        if isinstance(ref.dataId, CompleteDataCoordinate):
+            fields = {
+                dimension.name: value
+                for dimension, value in ref.dataId.items()
+                if value is not None
+            }
+            if isinstance(ref.dataId, ExpandedDataCoordinate):
+                extras = {element.name: ref.dataId.record(element) for element in ref.dataId.graph.elements}
             # If there is exactly one SkyPixDimension in the data ID, alias its
             # value with the key "skypix", so we can use that to match any
             # skypix dimension.
-            # We restrict this behavior to the (real-world) case where the
-            # data ID is a DataCoordinate, not just a dict.  That should only
-            # not be true in some test code, but that test code is a pain to
-            # update to be more like the real world while still providing our
-            # only tests of important behavior.
             skypix = [dimension for dimension in ref.dataId.graph if isinstance(dimension, SkyPixDimension)]
             if len(skypix) == 1:
-                fields["skypix"] = fields[skypix[0]]
-
-        # Extra information that can be included using . syntax
-        extras = getattr(ref.dataId, "records", {})
+                fields["skypix"] = fields[skypix[0].name]
+                if extras:
+                    extras["skypix"] = extras[skypix[0].name]
+        elif isinstance(ref.dataId, DataCoordinate):
+            # This branch and the one below should only fire in test code,
+            # where it's either a pain to go back and use realistic dimensions
+            # in the test data, or it's a pain to provide the complete metadata
+            # that an ExpandedDataCoordinate mandates.
+            fields = {
+                dimension.name: value
+                for dimension, value in ref.dataId.minimal().items()
+                if value is not None
+            }
+        else:
+            fields = dict(ref.dataId)  # type: ignore
 
         datasetType = ref.datasetType
         fields["datasetType"], component = datasetType.nameAndComponent()
@@ -463,7 +468,7 @@ class FileTemplate:
             fields["component"] = component
 
         usedRun = False
-        fields["run"] = ref.run
+        fields["run"] = ref.run  # type: ignore
 
         fmt = string.Formatter()
         parts = fmt.parse(self.template)

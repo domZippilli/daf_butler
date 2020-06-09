@@ -83,7 +83,7 @@ class ButlerUtilsTestSuite(unittest.TestCase):
             where=query,
             expand=False)]
         self.assertEqual(len(result), 1)
-        self.assertIn(dict(result[0]), expected)
+        self.assertIn(dict(result[0].minimal()), expected)
 
     def testButlerDimensions(self):
         self. _checkButlerDimension({"instrument"},
@@ -164,13 +164,13 @@ class ButlerUtilsTestSuite(unittest.TestCase):
     def testExpandUniqueId(self):
         self.assertEqual(dict(expandUniqueId(self.butler, {"instrument": "notACam"})),
                          {"instrument": "notACam"})
-        self.assertIn(dict(expandUniqueId(self.butler, {"visit": 101})),
+        self.assertIn(dict(expandUniqueId(self.butler, {"visit": 101}).minimal()),
                       [{"instrument": "notACam", "visit": 101},
                        {"instrument": "dummyCam", "visit": 101}])
-        self.assertIn(dict(expandUniqueId(self.butler, {"detector": 5})),
+        self.assertIn(dict(expandUniqueId(self.butler, {"detector": 5}).minimal()),
                       [{"instrument": "notACam", "detector": 5},
                        {"instrument": "dummyCam", "detector": 5}])
-        self.assertIn(dict(expandUniqueId(self.butler, {"physical_filter": "k2020"})),
+        self.assertIn(dict(expandUniqueId(self.butler, {"physical_filter": "k2020"}).minimal()),
                       [{"instrument": "notACam", "physical_filter": "k2020"},
                        {"instrument": "notACam", "physical_filter": "k2020"}])
         with self.assertRaises(ValueError):

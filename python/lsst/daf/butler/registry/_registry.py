@@ -45,6 +45,7 @@ from typing import (
 import sqlalchemy
 
 from ..core import (
+    CompleteDataCoordinate,
     Config,
     DataCoordinate,
     DataId,
@@ -57,7 +58,6 @@ from ..core import (
     DimensionRecord,
     DimensionUniverse,
     ExpandedDataCoordinate,
-    NamedKeyDict,
     StorageClassFactory,
 )
 from ..core.utils import doImport, iterable, transactional
@@ -773,7 +773,7 @@ class Registry:
         return self._datastoreBridges.findDatastores(ref)
 
     def expandDataId(self, dataId: Optional[DataId] = None, *, graph: Optional[DimensionGraph] = None,
-                     records: Optional[Mapping[DimensionElement, Optional[DimensionRecord]]] = None,
+                     records: Optional[Mapping[str, Optional[DimensionRecord]]] = None,
                      **kwargs: Any) -> ExpandedDataCoordinate:
         """Expand a dimension-based data ID to include additional information.
 
@@ -787,9 +787,9 @@ class Registry:
             Dimensions that are in ``dataId`` or ``kwds`` but not in ``graph``
             are silently ignored, providing a way to extract and expand a
             subset of a data ID.
-        records : `Mapping` [`DimensionElement`, `DimensionRecord`], optional
+        records : `Mapping` [`str`, `DimensionRecord`], optional
             Dimension record data to use before querying the database for that
-            data.
+            data, keyed by element name.
         **kwargs
             Additional keywords are treated like additional key-value pairs for
             ``dataId``, extending and overriding
@@ -803,18 +803,16 @@ class Registry:
         standardized = DataCoordinate.standardize(dataId, graph=graph, universe=self.dimensions, **kwargs)
         if isinstance(standardized, ExpandedDataCoordinate):
             return standardized
-        elif isinstance(dataId, ExpandedDataCoordinate):
-            records = NamedKeyDict(records) if records is not None else NamedKeyDict()
-            records.update(dataId.records)
-        else:
-            records = NamedKeyDict(records) if records is not None else NamedKeyDict()
-        keys = dict(standardized.byName())
+        records = dict(records) if records is not None else {}
+        if isinstance(dataId, ExpandedDataCoordinate):
+            records.update((name, dataId.record(name)) for name in dataId.graph.elements.names)
+        keys = dict(standardized.minimal().byName())
         for element in standardized.graph.primaryKeyTraversalOrder:
             record = records.get(element.name, ...)  # Use ... to mean not found; None might mean NULL
             if record is ...:
                 storage = self._dimensions[element]
                 record = storage.fetch(keys)
-                records[element] = record
+                records[element.name] = record
             if record is not None:
                 for d in element.implied:
                     value = getattr(record, d.name)
@@ -834,8 +832,8 @@ class Registry:
                         "but it is marked alwaysJoin=True; this means one or more dimensions are not "
                         "related."
                     )
-                records.update((d, None) for d in element.implied)
-        return ExpandedDataCoordinate(standardized.graph, standardized.values(), records=records)
+                records.update((name, None) for name in element.implied.names)
+        return CompleteDataCoordinate.fromMapping(standardized.graph, keys).expanded(records=records)
 
     def insertDimensionData(self, element: Union[DimensionElement, str],
                             *data: Union[Mapping[str, Any], DimensionRecord],
@@ -1135,7 +1133,11 @@ class Registry:
             if predicate(row):
                 result = query.extractDataId(row)
                 if expand:
-                    yield self.expandDataId(result, records=standardizedDataId.records)
+                    yield self.expandDataId(
+                        result,
+                        records={name: standardizedDataId.record(name)
+                                 for name in standardizedDataId.graph.elements.names}
+                    )
                 else:
                     yield result
 
@@ -1308,7 +1310,11 @@ class Registry:
                 if predicate(row):
                     dataId = query.extractDataId(row, graph=datasetType.dimensions)
                     if expand:
-                        dataId = self.expandDataId(dataId, records=standardizedDataId.records)
+                        dataId = self.expandDataId(
+                            dataId,
+                            records={name: standardizedDataId.record(name)
+                                     for name in standardizedDataId.graph.elements.names}
+                        )
                     yield query.extractDatasetRef(row, datasetType, dataId)[0]
         else:
             # For each data ID, yield only the DatasetRef with the lowest
@@ -1327,7 +1333,11 @@ class Registry:
             # so we do as little expansion as possible.
             if expand:
                 for ref in bestRefs.values():
-                    dataId = self.expandDataId(ref.dataId, records=standardizedDataId.records)
+                    dataId = self.expandDataId(
+                        ref.dataId,
+                        records={name: standardizedDataId.record(name)
+                                 for name in standardizedDataId.graph.elements.names}
+                    )
                     yield ref.expanded(dataId)
             else:
                 yield from bestRefs.values()

@@ -120,7 +120,7 @@ class ByDimensionsDatasetRecordStorage(DatasetRecordStorage):
         rows = []
         for dataset in datasets:
             row = dict(protoRow, dataset_id=dataset.getCheckedId())
-            for dimension, value in dataset.dataId.items():
+            for dimension, value in dataset.dataId.minimal().items():
                 row[dimension.name] = value
             rows.append(row)
         self._db.replace(self._dynamic, *rows)
@@ -170,7 +170,7 @@ class ByDimensionsDatasetRecordStorage(DatasetRecordStorage):
         if dataId is Select:
             kwargs = {dim.name: Select for dim in self.datasetType.dimensions.required}
         else:
-            kwargs = dict(dataId.byName())
+            kwargs = dict(dataId.minimal().byName())
         # We always constrain (never retrieve) the collection from the dynamic
         # table.
         kwargs[self._collections.getCollectionForeignKeyName()] = collection.key

@@ -31,6 +31,7 @@ from sqlalchemy.engine import RowProxy
 from lsst.sphgeom import Region
 
 from ...core import (
+    CompleteDataCoordinate,
     DataCoordinate,
     DatasetRef,
     DatasetType,
@@ -131,7 +132,8 @@ class Query:
         """
         return tuple(row[self._columns.getKeyColumn(dimension)] for dimension in dimensions)
 
-    def extractDataId(self, row: RowProxy, *, graph: Optional[DimensionGraph] = None) -> DataCoordinate:
+    def extractDataId(self, row: RowProxy, *, graph: Optional[DimensionGraph] = None
+                      ) -> CompleteDataCoordinate:
         """Extract a data ID from a result row.
 
         Parameters
@@ -144,13 +146,12 @@ class Query:
 
         Returns
         -------
-        dataId : `DataCoordinate`
-            A minimal data ID that identifies the requested dimensions but
-            includes no metadata or implied dimensions.
+        dataId : `CompleteDataCoordinate`
+            A data ID that identifies all required and implied dimensions.
         """
         if graph is None:
             graph = self.summary.requested
-        return DataCoordinate(graph, self.extractDimensionsTuple(row, graph.required))
+        return CompleteDataCoordinate.fromValues(graph, self.extractDimensionsTuple(row, graph.dimensions))
 
     def extractDatasetRef(self, row: RowProxy, datasetType: DatasetType,
                           dataId: Optional[DataCoordinate] = None) -> Tuple[DatasetRef, Optional[int]]:

@@ -152,5 +152,5 @@ class QueryDimensionRecordStorage(DimensionRecordStorage):
         # Given the restrictions imposed at construction, we know there's
         # nothing to actually fetch: everything we need is in the data ID.
         if isinstance(dataId, DataCoordinate):
-            dataId = dataId.byName()
+            dataId = dataId.minimal().byName()
         return RecordClass.fromDict(dataId)

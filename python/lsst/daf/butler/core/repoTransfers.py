@@ -156,7 +156,8 @@ class RepoExport:
             elements = frozenset(elements)
         records: MutableMapping[DimensionElement, Dict[DataCoordinate, DimensionRecord]] = defaultdict(dict)
         for dataId in dataIds:
-            for record in dataId.records.values():
+            for element in dataId.graph.elements:
+                record = dataId.record(element)
                 if record is not None and record.definition in elements:
                     records[record.definition].setdefault(record.dataId, record)
         for element in self._registry.dimensions.sorted(records.keys()):
@@ -353,7 +354,7 @@ class YamlRepoExportBackend(RepoExportBackend):
             "records": [
                 {
                     "dataset_id": [ref.id for ref in dataset.refs],
-                    "data_id": [ref.dataId.byName() for ref in dataset.refs],
+                    "data_id": [ref.dataId.minimal().byName() for ref in dataset.refs],
                     "path": dataset.path,
                     "formatter": dataset.formatter,
                     # TODO: look up and save other collections

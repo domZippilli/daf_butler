@@ -28,6 +28,7 @@ from typing import Iterator, List, Optional, Union
 from sqlalchemy.sql import ColumnElement
 
 from ...core import (
+    DataCoordinate,
     DatasetType,
     Dimension,
     DimensionElement,
@@ -111,8 +112,7 @@ class QuerySummary:
                  dataId: Optional[ExpandedDataCoordinate] = None,
                  expression: Optional[Union[str, QueryWhereExpression]] = None):
         self.requested = requested
-        self.dataId = dataId if dataId is not None else ExpandedDataCoordinate(requested.universe.empty, (),
-                                                                               records=NamedKeyDict())
+        self.dataId = dataId if dataId is not None else DataCoordinate.makeEmpty(requested.universe)
         self.expression = (expression if isinstance(expression, QueryWhereExpression)
                            else QueryWhereExpression(requested.universe, expression))
 

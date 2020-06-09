@@ -34,13 +34,13 @@ class ObservationDimensionPacker(DimensionPacker):
         self._instrumentName = fixed["instrument"]
         if self.dimensions.required.names == set(["instrument", "visit", "detector"]):
             self._observationName = "visit"
-            obsMax = fixed.records["instrument"].visit_max
+            obsMax = fixed.record("instrument").visit_max
         elif dimensions.required.names == set(["instrument", "exposure", "detector"]):
             self._observationName = "exposure"
-            obsMax = fixed.records["instrument"].exposure_max
+            obsMax = fixed.record("instrument").exposure_max
         else:
             raise ValueError(f"Invalid dimensions for ObservationDimensionPacker: {dimensions.required}")
-        self._detectorMax = fixed.records["instrument"].detector_max
+        self._detectorMax = fixed.record("instrument").detector_max
         self._maxBits = (obsMax*self._detectorMax).bit_length()
 
     @property

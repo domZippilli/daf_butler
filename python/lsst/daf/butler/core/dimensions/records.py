@@ -34,7 +34,7 @@ from typing import (
 )
 
 from ..timespan import Timespan
-from .coordinate import DataCoordinate
+from .coordinate import MinimalDataCoordinate
 from .elements import Dimension
 
 if TYPE_CHECKING:  # Imports needed only for type annotations; may be circular.
@@ -126,13 +126,13 @@ class DimensionRecord:
         for attrName, value in zip(self.__slots__, args):
             object.__setattr__(self, attrName, value)
         if self.definition.required.names == self.definition.graph.required.names:
-            dataId = DataCoordinate(
+            dataId = MinimalDataCoordinate.fromValues(
                 self.definition.graph,
                 args[:len(self.definition.required.names)]
             )
         else:
             assert not isinstance(self.definition, Dimension)
-            dataId = DataCoordinate(
+            dataId = MinimalDataCoordinate.fromValues(
                 self.definition.graph,
                 tuple(getattr(self, name) for name in self.definition.required.names)
             )
@@ -194,9 +194,9 @@ class DimensionRecord:
     # Class attributes below are shadowed by instance attributes, and are
     # present just to hold the docstrings for those instance attributes.
 
-    dataId: DataCoordinate
+    dataId: MinimalDataCoordinate
     """A dict-like identifier for this record's primary keys
-    (`DataCoordinate`).
+    (`MinimalDataCoordinate`).
     """
 
     definition: ClassVar[DimensionElement]

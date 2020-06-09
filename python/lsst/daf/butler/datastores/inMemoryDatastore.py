@@ -42,7 +42,7 @@ from typing import (
     Union,
 )
 
-from lsst.daf.butler import StoredDatastoreItemInfo, StorageClass, ButlerURI
+from lsst.daf.butler import DataCoordinate, StoredDatastoreItemInfo, StorageClass, ButlerURI
 from lsst.daf.butler.registry.interfaces import DatastoreRegistryBridge
 from .genericDatastore import GenericBaseDatastore
 
@@ -393,7 +393,17 @@ class InMemoryDatastore(GenericBaseDatastore):
         """
 
         # Include the dataID as a URI query
-        query = urlencode(ref.dataId)
+        if not isinstance(ref.dataId, DataCoordinate):
+            # This branch should only fire in datastore tests; normally
+            # DatasetRef conforms any data ID it's given to a true
+            # DataCoordinate.  But we can't do that in the datastore tests,
+            # because they use "visit+physical_filter" data IDs that aren't
+            # realistic (visit implies physical_filter), and we can't change
+            # that without breaking all of the test configurations that
+            # assume those are independent.
+            query = urlencode(ref.dataId)  # type: ignore
+        else:
+            query = urlencode(ref.dataId.minimal())
 
         # if this has never been written then we have to guess
         if not self.exists(ref):
