@@ -22,27 +22,39 @@ from __future__ import annotations
 
 __all__ = ("Query",)
 
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+import copy
+import enum
 import itertools
-from typing import Iterable, Optional, Tuple, Callable
+from typing import Callable, Iterable, Iterator, Optional, Tuple
 
-from sqlalchemy.sql import FromClause
-from sqlalchemy.engine import RowProxy
+import sqlalchemy
 
 from lsst.sphgeom import Region
 
 from ...core import (
+    addDimensionForeignKey,
     CompleteDataCoordinate,
     DataCoordinate,
     DatasetRef,
     DatasetType,
+    ddl,
     Dimension,
+    DimensionElement,
     DimensionGraph,
+    REGION_FIELD_SPEC,
+    SimpleQuery,
 )
-from ..interfaces import CollectionManager
-from ._structs import QuerySummary, QueryColumns
+from ..interfaces import (
+    CollectionManager,
+    Database,
+    DatasetRecordStorageManager,
+)
+from ._structs import DatasetQueryColumns, QueryColumns
 
 
-class Query:
+class Query(ABC):
     """A wrapper for a SQLAlchemy query that knows how to transform result rows
     into data IDs and dataset references.
 
@@ -53,15 +65,15 @@ class Query:
 
     Parameters
     ----------
-    sql : `sqlalchemy.sql.FromClause`
-        A complete SELECT query, including at least SELECT, FROM, and WHERE
-        clauses.
-    summary : `QuerySummary`
-        Struct that organizes the dimensions involved in the query.
+    graph : `DimensionGraph`
+        Object describing the dimensions included in the query.
+    whereRegion : `lsst.sphgeom.Region`, optional
+        Region that all region columns in all returned rows must overlap.
     columns : `QueryColumns`
         Columns that are referenced in the query in any clause.
     collections : `CollectionsManager`,
         Manager object for collection tables.
+    TODO
 
     Notes
     -----
@@ -73,17 +85,63 @@ class Query:
     overheads, but the only reason we would seriously consider not using
     SQLAlchemy here in the future would be to reduce computational overheads.
     """
-
-    def __init__(self, *, sql: FromClause,
-                 summary: QuerySummary,
-                 columns: QueryColumns,
-                 collections: CollectionManager):
-        self.summary = summary
-        self.sql = sql
-        self._columns = columns
+    def __init__(self, *,
+                 graph: DimensionGraph,
+                 whereRegion: Optional[Region],
+                 collections: CollectionManager,
+                 datasets: DatasetRecordStorageManager):
+        self.graph = graph
+        self.whereRegion = whereRegion
         self._collections = collections
+        self._datasets = datasets
 
-    def predicate(self, region: Optional[Region] = None) -> Callable[[RowProxy], bool]:
+    @abstractmethod
+    def isUnique(self) -> bool:
+        """Return `True` if this queries rows are guaranteed to be unique, and
+        `False` otherwise.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def getDimensionColumn(self, name: str) -> sqlalchemy.sql.ColumnElement:
+        # TODO: docs
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def spatial(self) -> Iterator[DimensionElement]:
+        # TODO: docs
+        raise NotImplementedError()
+
+    @abstractmethod
+    def getRegionColumn(self, name: str) -> sqlalchemy.sql.ColumnElement:
+        # TODO: docs
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def datasetTypes(self) -> Iterator[DatasetType]:
+        # TODO: docs
+        raise NotImplementedError()
+
+    @abstractmethod
+    def getDatasetColumns(self, name: str) -> DatasetQueryColumns:
+        # TODO: docs
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def sql(self) -> sqlalchemy.sql.FromClause:
+        """Return a SQLAlchemy object representing the full query.
+
+        Returns
+        -------
+        sql : `sqlalchemy.sql.FromClause`
+            A SQLAlchemy object representing the query.
+        """
+        raise NotImplementedError()
+
+    def predicate(self, region: Optional[Region] = None) -> Callable[[sqlalchemy.engine.RowProxy], bool]:
         """Return a callable that can perform extra Python-side filtering of
         query results.
 
@@ -96,8 +154,8 @@ class Query:
         ----------
         region : `sphgeom.Region`, optional
             A region that any result-row regions must overlap in order for the
-            predicate to return `True`.  If not provided, this will be the
-            region in `QuerySummary.dataId`, if there is one.
+            predicate to return `True`.  If not provided, this will be
+            ``self.region``, if that exists.
 
         Returns
         -------
@@ -105,17 +163,18 @@ class Query:
             A callable that takes a single `sqlalchemy.engine.RowProxy`
             argmument and returns `bool`.
         """
-        whereRegion = region if region is not None else self.summary.dataId.region
+        whereRegion = region if region is not None else self.whereRegion
 
-        def closure(row: RowProxy) -> bool:
-            rowRegions = [row[column] for column in self._columns.regions.values()]
+        def closure(row: sqlalchemy.engine.RowProxy) -> bool:
+            rowRegions = [row[self.getRegionColumn(element.name)] for element in self.spatial]
             if whereRegion and any(r.isDisjointFrom(whereRegion) for r in rowRegions):
                 return False
             return not any(a.isDisjointFrom(b) for a, b in itertools.combinations(rowRegions, 2))
 
         return closure
 
-    def extractDimensionsTuple(self, row: RowProxy, dimensions: Iterable[Dimension]) -> tuple:
+    def extractDimensionsTuple(self, row: sqlalchemy.engine.RowProxy,
+                               dimensions: Iterable[Dimension]) -> tuple:
         """Extract a tuple of data ID values from a result row.
 
         Parameters
@@ -130,9 +189,9 @@ class Query:
         values : `tuple`
             A tuple of dimension primary key values.
         """
-        return tuple(row[self._columns.getKeyColumn(dimension)] for dimension in dimensions)
+        return tuple(row[self.getDimensionColumn(dimension.name)] for dimension in dimensions)
 
-    def extractDataId(self, row: RowProxy, *, graph: Optional[DimensionGraph] = None
+    def extractDataId(self, row: sqlalchemy.engine.RowProxy, *, graph: Optional[DimensionGraph] = None
                       ) -> CompleteDataCoordinate:
         """Extract a data ID from a result row.
 
@@ -150,10 +209,10 @@ class Query:
             A data ID that identifies all required and implied dimensions.
         """
         if graph is None:
-            graph = self.summary.requested
+            graph = self.graph
         return CompleteDataCoordinate.fromValues(graph, self.extractDimensionsTuple(row, graph.dimensions))
 
-    def extractDatasetRef(self, row: RowProxy, datasetType: DatasetType,
+    def extractDatasetRef(self, row: sqlalchemy.engine.RowProxy, datasetType: DatasetType,
                           dataId: Optional[DataCoordinate] = None) -> Tuple[DatasetRef, Optional[int]]:
         """Extract a `DatasetRef` from a result row.
 
@@ -183,7 +242,275 @@ class Query:
         """
         if dataId is None:
             dataId = self.extractDataId(row, graph=datasetType.dimensions)
-        datasetColumns = self._columns.datasets[datasetType]
+        datasetColumns = self.getDatasetColumns(datasetType.name)
         runRecord = self._collections[row[datasetColumns.runKey]]
         return (DatasetRef(datasetType, dataId, id=row[datasetColumns.id], run=runRecord.name),
                 row[datasetColumns.rank] if datasetColumns.rank is not None else None)
+
+    def _makeTableSpec(self, constraints: bool = False) -> ddl.TableSpec:
+        # TODO: docs
+        unique = self.isUnique()
+        spec = ddl.TableSpec(fields=())
+        for dimension in self.graph:
+            addDimensionForeignKey(spec, dimension, primaryKey=unique, constraint=constraints)
+        for datasetType in self.datasetTypes:
+            self._datasets.addDatasetForeignKey(spec, name=f"{datasetType.name}_dataset",
+                                                primaryKey=unique,
+                                                constraint=constraints)
+            self._collections.addRunForeignKey(spec, prefix=f"{datasetType.name}_dataset_run",
+                                               nullable=False,
+                                               constraint=constraints)
+            if self.getDatasetColumns(datasetType.name).rank is not None:
+                spec.fields.add(
+                    ddl.FieldSpec(
+                        name=f"{datasetType.name}_dataset_rank",
+                        dtype=sqlalchemy.Integer,
+                        nullable=False,
+                    )
+                )
+        for element in self.spatial:
+            field = copy.copy(REGION_FIELD_SPEC)
+            field.name = f"{element.name}_region"
+            spec.fields.add(field)
+        return spec
+
+    def _makeSubsetQueryColumns(self, *, graph: Optional[DimensionGraph] = None,
+                                datasetTypes: Optional[Iterable[DatasetType]] = None,
+                                unique: bool = False) -> Tuple[DimensionGraph, Optional[QueryColumns]]:
+        # TODO: docs
+        if graph is None:
+            graph = self.graph
+        if datasetTypes is None:
+            datasetTypes = set(self.datasetTypes)
+        if graph == self.graph and datasetTypes == set(self.datasetTypes) and (self.isUnique() or not unique):
+            return graph, None
+        columns = QueryColumns()
+        for dimension in graph.dimensions:
+            col = self.getDimensionColumn(dimension.name)
+            columns.keys[dimension] = [col]
+        for element in self.spatial:
+            col = self.getRegionColumn(element.name)
+            columns.regions[element] = col
+        for datasetType in datasetTypes:
+            cols = self.getDatasetColumns(datasetType.name)
+            columns.datasets[datasetType] = cols
+        return graph, columns
+
+    @contextmanager
+    def materialize(self, db: Database) -> Iterator[MaterializedQuery]:
+        # TODO: docs
+        table = db.makeTemporaryTable(self._makeTableSpec())
+        db.insert(table, select=self.sql(), names=table.fields.names)
+        yield MaterializedQuery(table=table,
+                                spatial=self.spatial,
+                                datasetTypes=self.datasetTypes,
+                                isUnique=self.isUnique(),
+                                graph=self.graph,
+                                whereRegion=self.whereRegion,
+                                collections=self._collections,
+                                datasets=self._datasets)
+        db.dropTemporaryTable(db)
+
+    @abstractmethod
+    def subset(self, *, graph: Optional[DimensionGraph] = None,
+               datasetTypes: Optional[Iterable[DatasetType]] = None,
+               unique: bool = False) -> Query:
+        # TODO: docs
+        raise NotImplementedError()
+
+
+class DirectQueryUniqueness(enum.Enum):
+    NOT_UNIQUE = enum.auto()
+    NATURALLY_UNIQUE = enum.auto()
+    NEEDS_DISTINCT = enum.auto()
+
+
+class DirectQuery(Query):
+    """A `Query` implementation that represents a direct SELECT query that
+    usually joins many tables.
+
+    Parameters
+    ----------
+    simpleQuery : `SimpleQuery`
+        Struct representing the actual SELECT, FROM, and WHERE clauses.
+    graph : `DimensionGraph`
+        Object describing the dimensions included in the query.
+    whereRegion : `lsst.sphgeom.Region`, optional
+        Region that all region columns in all returned rows must overlap.
+    columns : `QueryColumns`
+        Columns that are referenced in the query in any clause.
+    collections : `CollectionsManager`,
+        Manager object for collection tables.
+    TODO
+    """
+    def __init__(self, *,
+                 simpleQuery: SimpleQuery,
+                 columns: QueryColumns,
+                 uniqueness: DirectQueryUniqueness,
+                 graph: DimensionGraph,
+                 whereRegion: Optional[Region],
+                 collections: CollectionManager,
+                 datasets: DatasetRecordStorageManager):
+        super().__init__(graph=graph, whereRegion=whereRegion,
+                         collections=collections, datasets=datasets)
+        assert not simpleQuery.columns, "Columns should always be set on a copy in .sql"
+        self._simpleQuery = simpleQuery
+        self._columns = columns
+        self._uniqueness = uniqueness
+
+    def isUnique(self) -> bool:
+        # Docstring inherited from Query.
+        return self._uniqueness is not DirectQueryUniqueness.NOT_UNIQUE
+
+    def getDimensionColumn(self, name: str) -> sqlalchemy.sql.ColumnElement:
+        # Docstring inherited from Query.
+        return self._columns.getKeyColumn(name).label(name)
+
+    @property
+    def spatial(self) -> Iterator[DimensionElement]:
+        # Docstring inherited from Query.
+        return iter(self._columns.regions)
+
+    def getRegionColumn(self, name: str) -> sqlalchemy.sql.ColumnElement:
+        # Docstring inherited from Query.
+        return self._columns.regions[name].label(f"{name}_region")
+
+    @property
+    def datasetTypes(self) -> Iterator[DatasetType]:
+        # Docstring inherited from Query.
+        return iter(self._columns.datasets)
+
+    def getDatasetColumns(self, name: str) -> DatasetQueryColumns:
+        # Docstring inherited from Query.
+        base = self._columns.datasets[name]
+        return DatasetQueryColumns(
+            id=base.id.label(f"{name}_dataset_id"),
+            runKey=base.runKey.label(self._collections.getRunForeignKeyName(f"{name}_dataset_run")),
+            rank=(base.rank.label("f{name}_dataset_rank") if base.rank is not None else None),
+        )
+
+    @property
+    def sql(self) -> sqlalchemy.sql.FromClause:
+        # Docstring inherited from Query.
+        simpleQuery = self._simpleQuery.copy()
+        for dimension in self.graph:
+            simpleQuery.columns.append(self.getDimensionColumn(dimension.name))
+        for datasetType in self.datasetTypes:
+            simpleQuery.columns.extend(self.getDatasetColumns(datasetType.name))
+        for element in self.spatial:
+            simpleQuery.columns.append(self.getRegionColumn(element.name))
+        sql = simpleQuery.combine()
+        if self._uniqueness is DirectQueryUniqueness.NEEDS_DISTINCT:
+            return sql.distinct()
+        else:
+            return sql
+
+    def subset(self, *, graph: Optional[DimensionGraph] = None,
+               datasetTypes: Optional[Iterable[DatasetType]] = None,
+               unique: bool = False) -> Query:
+        # Docstring inherited from Query.
+        graph, columns = self._makeSubsetQueryColumns(graph=graph, datasetTypes=datasetTypes, unique=unique)
+        if columns is None:
+            return self
+        return DirectQuery(
+            simpleQuery=self._simpleQuery.copy(),
+            columns=columns,
+            uniqueness=DirectQueryUniqueness.NEEDS_DISTINCT if unique else DirectQueryUniqueness.NOT_UNIQUE,
+            graph=graph,
+            whereRegion=self.whereRegion,
+            collections=self._collections,
+            datasets=self._datasets,
+        )
+
+
+class MaterializedQuery(Query):
+    """A `Query` implementation that represents query results saved in a
+    temporary table.
+
+    `MaterializedQuery` instances should not be constructed directly; use
+    `Query.materialize()` instead.
+
+    Parameters
+    ----------
+    table : `sqlalchemy.schema.Table`
+        SQLAlchemy table object.
+    graph : `DimensionGraph`
+        Object describing the dimensions included in the query.
+    region : `lsst.sphgeom.Region`, optional
+        Region that all region columns in all returned rows must overlap.
+    collections : `CollectionsManager`,
+        Manager object for collection tables.
+    """
+    def __init__(self, *,
+                 table: sqlalchemy.schema.Table,
+                 spatial: Iterable[DimensionElement],
+                 datasetTypes: Iterable[DatasetType],
+                 isUnique: bool,
+                 graph: DimensionGraph,
+                 whereRegion: Optional[Region],
+                 collections: CollectionManager,
+                 datasets: DatasetRecordStorageManager):
+        super().__init__(graph=graph, whereRegion=whereRegion, collections=collections, datasets=datasets)
+        self._table = table
+        self._spatial = tuple(spatial)
+        self._datasetTypes = tuple(datasetTypes)
+        self._isUnique = isUnique
+
+    def isUnique(self) -> bool:
+        # Docstring inherited from Query.
+        return self._isUnique
+
+    def getDimensionColumn(self, name: str) -> sqlalchemy.sql.ColumnElement:
+        # Docstring inherited from Query.
+        return self._table.columns[name]
+
+    @property
+    def spatial(self) -> Iterator[DimensionElement]:
+        # Docstring inherited from Query.
+        return iter(self._spatial)
+
+    def getRegionColumn(self, name: str) -> sqlalchemy.sql.ColumnElement:
+        # Docstring inherited from Query.
+        return self._table.columns[f"{name}_region"]
+
+    @property
+    def datasetTypes(self) -> Iterator[DatasetType]:
+        # Docstring inherited from Query.
+        return iter(self._datasetTypes)
+
+    def getDatasetColumns(self, name: str) -> DatasetQueryColumns:
+        # Docstring inherited from Query.
+        return DatasetQueryColumns(
+            id=self._table.columns[f"{name}_dataset_id"],
+            runKey=self._table.columns[self._collections.getRunForeignKeyName(f"{name}_dataset_run")],
+            rank=self._table.columns.get(f"{name}_dataset_rank"),
+        )
+
+    @property
+    def sql(self) -> sqlalchemy.sql.FromClause:
+        # Docstring inherited from Query.
+        return self._table.select().unique()
+
+    @contextmanager
+    def materialize(self, db: Database) -> Iterator[MaterializedQuery]:
+        # Docstring inherited from Query.
+        yield self
+
+    def subset(self, *, graph: Optional[DimensionGraph] = None,
+               datasetTypes: Optional[Iterable[DatasetType]] = None,
+               unique: bool = False) -> Query:
+        # Docstring inherited from Query.
+        graph, columns = self._makeSubsetQueryColumns(graph=graph, datasetTypes=datasetTypes, unique=unique)
+        if columns is None:
+            return self
+        simpleQuery = SimpleQuery()
+        simpleQuery.join(self._table)
+        return DirectQuery(
+            simpleQuery=simpleQuery,
+            columns=columns,
+            uniqueness=DirectQueryUniqueness.NEEDS_DISTINCT if unique else DirectQueryUniqueness.NOT_UNIQUE,
+            graph=graph,
+            whereRegion=self.whereRegion,
+            collections=self._collections,
+            datasets=self._datasets,
+        )

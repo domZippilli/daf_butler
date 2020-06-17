@@ -22,9 +22,8 @@ from __future__ import annotations
 
 __all__ = ("QueryBuilder",)
 
-from typing import Any, List, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Iterable, List, Optional, TYPE_CHECKING
 
-from sqlalchemy.sql import ColumnElement, and_, literal, select, FromClause
 import sqlalchemy.sql
 
 from ...core import (
@@ -39,7 +38,7 @@ from ...core import (
 
 from ._structs import QuerySummary, QueryColumns, DatasetQueryColumns
 from .expressions import ClauseVisitor
-from ._query import Query
+from ._query import DirectQuery, DirectQueryUniqueness
 from ..wildcards import CollectionSearch, CollectionQuery
 
 if TYPE_CHECKING:
@@ -71,9 +70,10 @@ class QueryBuilder:
         self._collections = collections
         self._dimensions = dimensions
         self._datasets = datasets
-        self._sql: Optional[sqlalchemy.sql.FromClause] = None
-        self._elements: NamedKeyDict[DimensionElement, FromClause] = NamedKeyDict()
+        self._simpleQuery = SimpleQuery()
+        self._elements: NamedKeyDict[DimensionElement, sqlalchemy.sql.FromClause] = NamedKeyDict()
         self._columns = QueryColumns()
+        self._isNaturallyUnique = True
 
     def hasDimensionKey(self, dimension: Dimension) -> bool:
         """Return `True` if the given dimension's primary key column has
@@ -182,9 +182,14 @@ class QueryBuilder:
                 runKey=subquery.columns[self._collections.getRunForeignKeyName()],
                 rank=subquery.columns["rank"] if addRank else None
             )
+        else:
+            # Joining in dataset tables just to constrain the data IDs may
+            # result in non-unique result rows, because we could get matches
+            # from multiple collections.
+            self._isNaturallyUnique = False
         return True
 
-    def joinTable(self, table: FromClause, dimensions: NamedValueSet[Dimension]) -> None:
+    def joinTable(self, table: sqlalchemy.sql.FromClause, dimensions: NamedValueSet[Dimension]) -> None:
         """Join an arbitrary table to the query via dimension relationships.
 
         External calls to this method should only be necessary for tables whose
@@ -204,8 +209,9 @@ class QueryBuilder:
         joinOn = self.startJoin(table, dimensions, dimensions.names)
         self.finishJoin(table, joinOn)
 
-    def startJoin(self, table: FromClause, dimensions: Iterable[Dimension], columnNames: Iterable[str]
-                  ) -> List[ColumnElement]:
+    def startJoin(self, table: sqlalchemy.sql.FromClause, dimensions: Iterable[Dimension],
+                  columnNames: Iterable[str]
+                  ) -> List[sqlalchemy.sql.ColumnElement]:
         """Begin a join on dimensions.
 
         Must be followed by call to `finishJoin`.
@@ -255,19 +261,14 @@ class QueryBuilder:
             to form (part of) the ON expression for this JOIN.  Should include
             at least the elements of the list returned by `startJoin`.
         """
-        if joinOn:
-            assert self._sql is not None
-            self._sql = self._sql.join(table, and_(*joinOn))
-        elif self._sql is None:
-            self._sql = table
+        onclause: Optional[sqlalchemy.sql.ColumnElement]
+        if len(joinOn) == 0:
+            onclause = None
+        elif len(joinOn) == 1:
+            onclause = joinOn[0]
         else:
-            # New table is completely unrelated to all already-included
-            # tables.  We need a cross join here but SQLAlchemy does not
-            # have a specific method for that. Using join() without
-            # `onclause` will try to join on FK and will raise an exception
-            # for unrelated tables, so we have to use `onclause` which is
-            # always true.
-            self._sql = self._sql.join(table, literal(True) == literal(True))
+            onclause = sqlalchemy.sql.and_(*joinOn)
+        self._simpleQuery.join(table, onclause=onclause)
 
     def _joinMissingDimensionElements(self) -> None:
         """Join all dimension element tables that were identified as necessary
@@ -299,10 +300,9 @@ class QueryBuilder:
         For internal use by `QueryBuilder` only; will be called (and should
         only by called) by `finish`.
         """
-        whereTerms = []
         if self.summary.expression.tree is not None:
             visitor = ClauseVisitor(self.summary.universe, self._columns, self._elements)
-            whereTerms.append(self.summary.expression.tree.visit(visitor))
+            self._simpleQuery.where.append(self.summary.expression.tree.visit(visitor))
         for dimension, columnsInQuery in self._columns.keys.items():
             if dimension in self.summary.dataId.graph:
                 givenKey = self.summary.dataId[dimension]
@@ -311,7 +311,7 @@ class QueryBuilder:
                 # them equal to each other, but more constraints have a chance
                 # of making things easier on the DB's query optimizer.
                 for columnInQuery in columnsInQuery:
-                    whereTerms.append(columnInQuery == givenKey)
+                    self._simpleQuery.where.append(columnInQuery == givenKey)
             else:
                 # Dimension is not fully identified, but it might be a skypix
                 # dimension that's constrained by a given region.
@@ -321,7 +321,7 @@ class QueryBuilder:
                     for begin, end in dimension.pixelization.envelope(self.summary.dataId.region):
                         givenSkyPixIds.extend(range(begin, end))
                     for columnInQuery in columnsInQuery:
-                        whereTerms.append(columnInQuery.in_(givenSkyPixIds))
+                        self._simpleQuery.where.append(columnInQuery.in_(givenSkyPixIds))
         # If we are given an dataId with a timespan, and there are one or more
         # timespans in the query that aren't given, add a WHERE expression for
         # each of them.
@@ -331,30 +331,9 @@ class QueryBuilder:
             assert givenInterval is not None
             for element, intervalInQuery in self._columns.timespans.items():
                 assert element not in self.summary.dataId.graph.elements
-                whereTerms.append(intervalInQuery.overlaps(givenInterval, ops=sqlalchemy.sql))
-        # AND-together the full WHERE clause, and combine it with the FROM
-        # clause.
-        assert self._sql is not None
-        self._sql = self._sql.where(and_(*whereTerms))
+                self._simpleQuery.where.append(intervalInQuery.overlaps(givenInterval, ops=sqlalchemy.sql))
 
-    def _addSelectClause(self) -> None:
-        """Add a SELECT clause to the query under construction containing all
-        output columns identified by the `QuerySummary` and requested in calls
-        to `joinDataset` with ``isResult=True``.
-
-        For internal use by `QueryBuilder` only; will be called (and should
-        only by called) by `finish`.
-        """
-        columns = []
-        for dimension in self.summary.requested:
-            columns.append(self._columns.getKeyColumn(dimension))
-        for datasetColumns in self._columns.datasets.values():
-            columns.extend(datasetColumns)
-        for regionColumn in self._columns.regions.values():
-            columns.append(regionColumn)
-        self._sql = select(columns).select_from(self._sql)
-
-    def finish(self) -> Query:
+    def finish(self) -> DirectQuery:
         """Finish query constructing, returning a new `Query` instance.
 
         This automatically joins any missing dimension element tables
@@ -372,7 +351,13 @@ class QueryBuilder:
             rows.
         """
         self._joinMissingDimensionElements()
-        self._addSelectClause()
         self._addWhereClause()
-        return Query(summary=self.summary, sql=self._sql, columns=self._columns,
-                     collections=self._collections)
+        uniqueness = (DirectQueryUniqueness.NATURALLY_UNIQUE if self._isNaturallyUnique
+                      else DirectQueryUniqueness.NOT_UNIQUE)
+        return DirectQuery(graph=self.summary.requested,
+                           uniqueness=uniqueness,
+                           whereRegion=self.summary.dataId.region,
+                           simpleQuery=self._simpleQuery,
+                           columns=self._columns,
+                           collections=self._collections,
+                           datasets=self._datasets)
