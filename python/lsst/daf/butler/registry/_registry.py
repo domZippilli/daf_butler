@@ -1334,6 +1334,7 @@ class Registry:
         for datasetType in standardizedDatasetTypes:
             builder.joinDataset(datasetType, collections, isResult=False)
         query = builder.finish()
+        query = query.subset(datasetTypes=())
         return CompleteDataCoordinateQueryResults(self._db, query, self._dimensions)
 
     def queryDimensionRecords(self, element: Union[DimensionElement, str], *,

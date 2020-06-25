@@ -51,6 +51,8 @@ class CompleteDataCoordinateQueryResults(DataCoordinateIterable[CompleteDataCoor
         self._db = db
         self._query = query
         self._dimensions = dimensions
+        assert next(query.datasetTypes, None) is None, \
+            "Query used to initialize data coordinate results should not have any datasets."
 
     def __iter__(self) -> Iterator[CompleteDataCoordinate]:
         predicate = self._query.predicate()

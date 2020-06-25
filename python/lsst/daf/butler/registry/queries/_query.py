@@ -407,7 +407,7 @@ class DirectQuery(Query):
 
     def subset(self, *, graph: Optional[DimensionGraph] = None,
                datasetTypes: Optional[Iterable[DatasetType]] = None,
-               unique: bool = False) -> Query:
+               unique: bool = False) -> DirectQuery:
         # Docstring inherited from Query.
         graph, columns = self._makeSubsetQueryColumns(graph=graph, datasetTypes=datasetTypes, unique=unique)
         if columns is None:
