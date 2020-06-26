@@ -51,7 +51,7 @@ class CompleteDataCoordinateQueryResults(DataCoordinateIterable[CompleteDataCoor
         self._db = db
         self._query = query
         self._dimensions = dimensions
-        assert next(query.datasetTypes, None) is None, \
+        assert query.datasetType is None, \
             "Query used to initialize data coordinate results should not have any datasets."
 
     def __iter__(self) -> Iterator[CompleteDataCoordinate]:
@@ -93,7 +93,7 @@ class CompleteDataCoordinateQueryResults(DataCoordinateIterable[CompleteDataCoor
             return self
         return CompleteDataCoordinateQueryResults(
             self._db,
-            self._query.subset(graph=graph, datasetTypes=(), unique=unique),
+            self._query.subset(graph=graph, datasets=False, unique=unique),
             self._dimensions,
         )
 

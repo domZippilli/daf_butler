@@ -218,6 +218,10 @@ class DatasetQueryColumns:
     instances from query results.
     """
 
+    datasetType: DatasetType
+    """The dataset type being queried (`DatasetType`).
+    """
+
     id: ColumnElement
     """Column containing the unique integer ID for this dataset.
     """
@@ -244,7 +248,7 @@ class QueryColumns:
         self.keys = NamedKeyDict()
         self.timespans = NamedKeyDict()
         self.regions = NamedKeyDict()
-        self.datasets = NamedKeyDict()
+        self.datasets = None
 
     keys: NamedKeyDict[Dimension, List[ColumnElement]]
     """Columns that correspond to the primary key values of dimensions
@@ -276,10 +280,10 @@ class QueryColumns:
     in `QuerySummary.spatial`.
     """
 
-    datasets: NamedKeyDict[DatasetType, DatasetQueryColumns]
+    datasets: Optional[DatasetQueryColumns]
     """Columns that can be used to construct `DatasetRef` instances from query
-    results, for each `DatasetType` included in the query
-    (`NamedKeyDict` [ `DatasetType`, `DatasetQueryColumns` ] ).
+    results.
+    (`DatasetQueryColumns` or `None`).
     """
 
     def getKeyColumn(self, dimension: Union[Dimension, str]) -> ColumnElement:

@@ -1213,7 +1213,7 @@ class Registry:
                         records={name: standardizedDataId.record(name)
                                  for name in standardizedDataId.graph.elements.names}
                     )
-                yield query.extractDatasetRef(row, datasetType, dataId)
+                yield query.extractDatasetRef(row, dataId)
 
     def queryDataIds(self, dimensions: Union[Iterable[Union[Dimension, str]], Dimension, str], *,
                      dataId: Optional[DataId] = None,
@@ -1306,7 +1306,6 @@ class Registry:
         for datasetType in standardizedDatasetTypes:
             builder.joinDataset(datasetType, collections, isResult=False)
         query = builder.finish()
-        query = query.subset(datasetTypes=())
         return CompleteDataCoordinateQueryResults(self._db, query, self._dimensions)
 
     def queryDimensionRecords(self, element: Union[DimensionElement, str], *,

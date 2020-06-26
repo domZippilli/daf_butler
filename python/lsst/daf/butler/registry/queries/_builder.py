@@ -240,7 +240,10 @@ class QueryBuilder:
                 ).alias(datasetType.name)
             else:
                 subquery = subquery.alias(datasetType.name)
-            self._columns.datasets[datasetType] = DatasetQueryColumns(
+            assert self._columns.datasets is None, \
+                "At most one result dataset type can be returned by a query."
+            self._columns.datasets = DatasetQueryColumns(
+                datasetType=datasetType,
                 id=subquery.columns["id"],
                 runKey=subquery.columns[runKeyName],
             )
