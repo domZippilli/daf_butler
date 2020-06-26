@@ -73,7 +73,6 @@ class QueryBuilder:
         self._simpleQuery = SimpleQuery()
         self._elements: NamedKeyDict[DimensionElement, sqlalchemy.sql.FromClause] = NamedKeyDict()
         self._columns = QueryColumns()
-        self._isNaturallyUnique = True
 
     def hasDimensionKey(self, dimension: Dimension) -> bool:
         """Return `True` if the given dimension's primary key column has
@@ -182,11 +181,6 @@ class QueryBuilder:
                 runKey=subquery.columns[self._collections.getRunForeignKeyName()],
                 rank=subquery.columns["rank"] if addRank else None
             )
-        else:
-            # Joining in dataset tables just to constrain the data IDs may
-            # result in non-unique result rows, because we could get matches
-            # from multiple collections.
-            self._isNaturallyUnique = False
         return True
 
     def joinTable(self, table: sqlalchemy.sql.FromClause, dimensions: NamedValueSet[Dimension]) -> None:
@@ -352,10 +346,8 @@ class QueryBuilder:
         """
         self._joinMissingDimensionElements()
         self._addWhereClause()
-        uniqueness = (DirectQueryUniqueness.NATURALLY_UNIQUE if self._isNaturallyUnique
-                      else DirectQueryUniqueness.NOT_UNIQUE)
         return DirectQuery(graph=self.summary.requested,
-                           uniqueness=uniqueness,
+                           uniqueness=DirectQueryUniqueness.NOT_UNIQUE,
                            whereRegion=self.summary.dataId.region,
                            simpleQuery=self._simpleQuery,
                            columns=self._columns,
