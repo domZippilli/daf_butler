@@ -21,13 +21,22 @@
 from __future__ import annotations
 
 __all__ = (
+    "ChainedDatasetQueryResults",
     "DataCoordinateQueryResults",
+    "DatasetQueryResults",
+    "ParentDatasetQueryResults",
 )
 
-from contextlib import contextmanager
+from abc import abstractmethod
+from contextlib import contextmanager, ExitStack
+import itertools
 from typing import (
     Callable,
+    ContextManager,
+    Generic,
+    Iterable,
     Iterator,
+    Sequence,
     Mapping,
     Optional,
     Type,
@@ -40,6 +49,8 @@ from ...core import (
     CompleteDataCoordinate,
     DataCoordinate,
     DataCoordinateIterable,
+    DatasetRef,
+    DatasetType,
     DimensionGraph,
     DimensionRecord,
     ExpandedDataCoordinate,
@@ -144,3 +155,97 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
                 for dimension in self.graph.required
             ])
         )
+
+
+class DatasetQueryResults(Iterable[DatasetRef]):
+
+    @abstractmethod
+    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def materialize(self) -> ContextManager[DatasetQueryResults]:
+        raise NotImplementedError()
+
+
+class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
+
+    def __init__(self, db: Database, query: Query, dimensions: DimensionRecordStorageManager, *,
+                 components: Sequence[Optional[str]],
+                 records: Optional[Mapping[str, Mapping[tuple, DimensionRecord]]] = None):
+        self._db = db
+        self._query = query
+        self._dimensions = dimensions
+        self._components = components
+        self._records = records
+        assert query.datasetType is not None, \
+            "Query used to initialize data coordinate results must have a dataset."
+        assert query.datasetType.dimensions == query.graph
+
+    __slots__ = ("_db", "_query", "_dimensions", "_components", "_records")
+
+    def __iter__(self) -> Iterator[DatasetRef]:
+        for row in self._query.rows(self._db):
+            parentRef = self._query.extractDatasetRef(row, records=self._records)
+            for component in self._components:
+                if component is None:
+                    yield parentRef
+                else:
+                    yield parentRef.makeComponentRef(component)
+
+    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults]:
+        yield self
+
+    @contextmanager
+    def materialize(self) -> Iterator[ParentDatasetQueryResults[D]]:
+        with self._query.materialize(self._db) as materialized:
+            yield ParentDatasetQueryResults(self._db, materialized, self._dimensions,
+                                            components=self._components,
+                                            records=self._records)
+
+    @property
+    def parentDatasetType(self) -> DatasetType:
+        assert self._query.datasetType is not None
+        return self._query.datasetType
+
+    @property
+    def dataIds(self) -> DataCoordinateQueryResults[D]:
+        return DataCoordinateQueryResults(
+            self._db,
+            self._query.subset(graph=self.parentDatasetType.dimensions, datasets=False, unique=False),
+            self._dimensions,
+            records=self._records,
+        )
+
+    def withComponents(self, components: Sequence[Optional[str]]) -> ParentDatasetQueryResults:
+        return ParentDatasetQueryResults(self._db, self._query, self._dimensions, records=self._records,
+                                         components=components)
+
+    def expanded(self) -> ParentDatasetQueryResults[ExpandedDataCoordinate]:
+        if self._records is None:
+            records = self.dataIds.expanded()._records
+            return ParentDatasetQueryResults(self._db, self._query, self._dimensions, records=records,
+                                             components=self._components)
+        else:
+            return self  # type: ignore
+
+
+class ChainedDatasetQueryResults(DatasetQueryResults):
+
+    def __init__(self, chain: Sequence[ParentDatasetQueryResults]):
+        self._chain = chain
+
+    __slots__ = ("_chain",)
+
+    def __iter__(self) -> Iterator[DatasetRef]:
+        return itertools.chain.from_iterable(self._chain)
+
+    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults]:
+        return iter(self._chain)
+
+    @contextmanager
+    def materialize(self) -> Iterator[ChainedDatasetQueryResults]:
+        with ExitStack() as stack:
+            yield ChainedDatasetQueryResults(
+                [stack.enter_context(r.materialize()) for r in self._chain]
+            )

@@ -63,7 +63,10 @@ from ..core import (
 from ..core.utils import doImport, iterable, transactional
 from ._config import RegistryConfig
 from .queries import (
+    ChainedDatasetQueryResults,
     DataCoordinateQueryResults,
+    DatasetQueryResults,
+    ParentDatasetQueryResults,
     QueryBuilder,
     QuerySummary,
 )
@@ -1047,9 +1050,8 @@ class Registry:
                       dataId: Optional[DataId] = None,
                       where: Optional[str] = None,
                       deduplicate: bool = False,
-                      expand: bool = True,
                       components: Optional[bool] = None,
-                      **kwargs: Any) -> Iterator[DatasetRef]:
+                      **kwargs: Any) -> DatasetQueryResults:
         """Query for and iterate over dataset references matching user-provided
         criteria.
 
@@ -1087,9 +1089,6 @@ class Registry:
             (according to the order of ``collections`` passed in).  If `True`,
             ``collections`` must not contain regular expressions and may not
             be `...`.
-        expand : `bool`, optional
-            If `True` (default) attach `ExpandedDataCoordinate` instead of
-            minimal `DataCoordinate` base-class instances.
         components : `bool`, optional
             If `True`, apply all dataset expression patterns to component
             dataset type names as well.  If `False`, never apply patterns to
@@ -1103,12 +1102,10 @@ class Registry:
             argument (and may be used to provide a constraining data ID even
             when the ``dataId`` argument is `None`).
 
-        Yields
-        ------
-        ref : `DatasetRef`
-            Dataset references matching the given query criteria.  These
-            are grouped by `DatasetType` if the query evaluates to multiple
-            dataset types, but order is otherwise unspecified.
+        Returns
+        -------
+        refs : `DatasetQueryResults`
+            Dataset references matching the given query criteria.
 
         Raises
         ------
@@ -1168,18 +1165,24 @@ class Registry:
             composition = {parentDatasetType: [componentName]}
         if composition is not None:
             # We need to recurse.  Do that once for each parent dataset type.
+            chain = []
             for parentDatasetType, componentNames in composition.items():
-                for parentRef in self.queryDatasets(parentDatasetType, collections=collections,
-                                                    dimensions=dimensions, dataId=standardizedDataId,
-                                                    where=where, deduplicate=deduplicate):
-                    # Loop over components, yielding one for each one for each
-                    # one requested.
-                    for componentName in componentNames:
-                        if componentName is None:
-                            yield parentRef
-                        else:
-                            yield parentRef.makeComponentRef(componentName)
-            return
+                parentResults = self.queryDatasets(
+                    parentDatasetType,
+                    collections=collections,
+                    dimensions=dimensions,
+                    dataId=standardizedDataId,
+                    where=where,
+                    deduplicate=deduplicate
+                )
+                if isinstance(parentResults, ParentDatasetQueryResults):
+                    chain.append(
+                        parentResults.withComponents(componentNames)
+                    )
+                else:
+                    # Should only happen if we know there would be no results.
+                    assert isinstance(parentResults, ChainedDatasetQueryResults) and not parentResults._chain
+            return ChainedDatasetQueryResults(chain)
         # If we get here, there's no need to recurse (or we are already
         # recursing; there can only ever be one level of recursion).
 
@@ -1201,19 +1204,9 @@ class Registry:
         # actually wildcard expressions, and we've asked for deduplication,
         # this will raise TypeError for us.
         if not builder.joinDataset(datasetType, collections, isResult=True, deduplicate=deduplicate):
-            return
+            return ChainedDatasetQueryResults(())
         query = builder.finish()
-        predicate = query.predicate()
-        for row in self._db.query(query.sql):
-            if predicate(row):
-                dataId = query.extractDataId(row, graph=datasetType.dimensions)
-                if expand:
-                    dataId = self.expandDataId(
-                        dataId,
-                        records={name: standardizedDataId.record(name)
-                                 for name in standardizedDataId.graph.elements.names}
-                    )
-                yield query.extractDatasetRef(row, dataId)
+        return ParentDatasetQueryResults(self._db, query, self._dimensions, components=[None])
 
     def queryDataIds(self, dimensions: Union[Iterable[Union[Dimension, str]], Dimension, str], *,
                      dataId: Optional[DataId] = None,

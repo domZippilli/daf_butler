@@ -415,7 +415,6 @@ class RegistryTests(ABC):
         childRefs2 = set(registry.queryDatasets(
             "permabias.wcs",
             collections=collection,
-            expand=False,
         ))
         self.assertEqual(
             {ref.unresolved() for ref in childRefs2},
