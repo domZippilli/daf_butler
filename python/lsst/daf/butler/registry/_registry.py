@@ -63,9 +63,9 @@ from ..core import (
 from ..core.utils import doImport, iterable, transactional
 from ._config import RegistryConfig
 from .queries import (
+    DataCoordinateQueryResults,
     QueryBuilder,
     QuerySummary,
-    CompleteDataCoordinateQueryResults,
 )
 from ._collectionType import CollectionType
 from ._exceptions import ConflictingDefinitionError, InconsistentDataIdError, OrphanedRecordError
@@ -1221,7 +1221,7 @@ class Registry:
                      collections: Any = None,
                      where: Optional[str] = None,
                      components: Optional[bool] = None,
-                     **kwargs: Any) -> CompleteDataCoordinateQueryResults:
+                     **kwargs: Any) -> DataCoordinateQueryResults:
         """Query for data IDs matching user-provided criteria.
 
         Parameters
@@ -1271,7 +1271,7 @@ class Registry:
 
         Returns
         -------
-        dataIds : `CompleteDataCoordinateQueryResults`
+        dataIds : `DataCoordinateQueryResults`
             Data IDs matching the given query parameters.
         """
         dimensions = iterable(dimensions)
@@ -1306,7 +1306,7 @@ class Registry:
         for datasetType in standardizedDatasetTypes:
             builder.joinDataset(datasetType, collections, isResult=False)
         query = builder.finish()
-        return CompleteDataCoordinateQueryResults(self._db, query, self._dimensions)
+        return DataCoordinateQueryResults(self._db, query, self._dimensions)
 
     def queryDimensionRecords(self, element: Union[DimensionElement, str], *,
                               dataId: Optional[DataId] = None,
@@ -1351,7 +1351,7 @@ class Registry:
 
         Returns
         -------
-        dataIds : `CompleteDataCoordinateQueryResults`
+        dataIds : `DataCoordinateQueryResults`
             Data IDs matching the given query parameters.
         """
         return iter(self._dimensions[element].fetch(dataIds))
