@@ -213,7 +213,7 @@ class Query(ABC):
         return CompleteDataCoordinate.fromValues(graph, self.extractDimensionsTuple(row, graph.dimensions))
 
     def extractDatasetRef(self, row: sqlalchemy.engine.RowProxy, datasetType: DatasetType,
-                          dataId: Optional[DataCoordinate] = None) -> Tuple[DatasetRef, Optional[int]]:
+                          dataId: Optional[DataCoordinate] = None) -> DatasetRef:
         """Extract a `DatasetRef` from a result row.
 
         Parameters
@@ -234,18 +234,12 @@ class Query(ABC):
         ref : `DatasetRef`
             Reference to the dataset; guaranteed to have `DatasetRef.id` not
             `None`.
-        rank : `int` or `None`
-            Integer index of the collection in which this dataset was found,
-            within the sequence of collections passed when constructing the
-            query.  `None` if `QueryBuilder.joinDataset` was called with
-            ``addRank=False``.
         """
         if dataId is None:
             dataId = self.extractDataId(row, graph=datasetType.dimensions)
         datasetColumns = self.getDatasetColumns(datasetType.name)
         runRecord = self._collections[row[datasetColumns.runKey]]
-        return (DatasetRef(datasetType, dataId, id=row[datasetColumns.id], run=runRecord.name),
-                row[datasetColumns.rank] if datasetColumns.rank is not None else None)
+        return DatasetRef(datasetType, dataId, id=row[datasetColumns.id], run=runRecord.name)
 
     def _makeTableSpec(self, constraints: bool = False) -> ddl.TableSpec:
         # TODO: docs
@@ -260,14 +254,6 @@ class Query(ABC):
             self._collections.addRunForeignKey(spec, prefix=f"{datasetType.name}_dataset_run",
                                                nullable=False,
                                                constraint=constraints)
-            if self.getDatasetColumns(datasetType.name).rank is not None:
-                spec.fields.add(
-                    ddl.FieldSpec(
-                        name=f"{datasetType.name}_dataset_rank",
-                        dtype=sqlalchemy.Integer,
-                        nullable=False,
-                    )
-                )
         for element in self.spatial:
             field = copy.copy(REGION_FIELD_SPEC)
             field.name = f"{element.name}_region"
@@ -386,7 +372,6 @@ class DirectQuery(Query):
         return DatasetQueryColumns(
             id=base.id.label(f"{name}_dataset_id"),
             runKey=base.runKey.label(self._collections.getRunForeignKeyName(f"{name}_dataset_run")),
-            rank=(base.rank.label("f{name}_dataset_rank") if base.rank is not None else None),
         )
 
     @property
@@ -483,7 +468,6 @@ class MaterializedQuery(Query):
         return DatasetQueryColumns(
             id=self._table.columns[f"{name}_dataset_id"],
             runKey=self._table.columns[self._collections.getRunForeignKeyName(f"{name}_dataset_run")],
-            rank=self._table.columns.get(f"{name}_dataset_rank"),
         )
 
     @property
