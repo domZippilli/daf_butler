@@ -27,7 +27,14 @@ from contextlib import contextmanager
 import copy
 import enum
 import itertools
-from typing import Callable, Iterable, Iterator, Optional, Tuple
+from typing import (
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Optional,
+    Tuple,
+)
 
 import sqlalchemy
 
@@ -43,6 +50,7 @@ from ...core import (
     Dimension,
     DimensionElement,
     DimensionGraph,
+    DimensionRecord,
     REGION_FIELD_SPEC,
     SimpleQuery,
 )
@@ -157,7 +165,7 @@ class Query(ABC):
         region : `sphgeom.Region`, optional
             A region that any result-row regions must overlap in order for the
             predicate to return `True`.  If not provided, this will be
-            ``self.region``, if that exists.
+            ``self.whereRegion``, if that exists.
 
         Returns
         -------
@@ -174,6 +182,26 @@ class Query(ABC):
             return not any(a.isDisjointFrom(b) for a, b in itertools.combinations(rowRegions, 2))
 
         return closure
+
+    def rows(self, db: Database, *, region: Optional[Region] = None) -> Iterator[sqlalchemy.engine.RowProxy]:
+        """Execute the query and yield result rows, applying `predicate`.
+
+        Parameters
+        ----------
+        region : `sphgeom.Region`, optional
+            A region that any result-row regions must overlap in order to be
+            yielded.  If not provided, this will be ``self.whereRegion``, if
+            that exists.
+
+        Yieldsx
+        ------
+        row : `sqlalchemy.engine.RowProxy`
+            Result row from the query.
+        """
+        predicate = self.predicate(region)
+        for row in db.query(self.sql):
+            if predicate(row):
+                yield row
 
     def extractDimensionsTuple(self, row: sqlalchemy.engine.RowProxy,
                                dimensions: Iterable[Dimension]) -> tuple:
@@ -193,7 +221,9 @@ class Query(ABC):
         """
         return tuple(row[self.getDimensionColumn(dimension.name)] for dimension in dimensions)
 
-    def extractDataId(self, row: sqlalchemy.engine.RowProxy, *, graph: Optional[DimensionGraph] = None
+    def extractDataId(self, row: sqlalchemy.engine.RowProxy, *,
+                      graph: Optional[DimensionGraph] = None,
+                      records: Optional[Mapping[str, Mapping[tuple, DimensionRecord]]] = None,
                       ) -> CompleteDataCoordinate:
         """Extract a data ID from a result row.
 
@@ -204,18 +234,38 @@ class Query(ABC):
         graph : `DimensionGraph`, optional
             The dimensions the returned data ID should identify.  If not
             provided, this will be all dimensions in `QuerySummary.requested`.
+        records : `Mapping` [ `str`, `Mapping` [ `tuple`, `DimensionRecord` ] ]
+            Records to use to return an `ExpandedDataCoordinate`.  If provided,
+            outer keys must include all dimension element names in ``graph``,
+            and inner keys should be tuples of dimension primary key values
+            in the same order as ``element.graph.required``.
 
         Returns
         -------
         dataId : `CompleteDataCoordinate`
-            A data ID that identifies all required and implied dimensions.
+            A data ID that identifies all required and implied dimensions.  If
+            ``records is not None``, this is will be an
+            `ExpandedDataCoordinate` instance.
         """
         if graph is None:
             graph = self.graph
-        return CompleteDataCoordinate.fromValues(graph, self.extractDimensionsTuple(row, graph.dimensions))
+        complete = CompleteDataCoordinate.fromValues(
+            graph,
+            self.extractDimensionsTuple(row, graph.dimensions)
+        )
+        if records is not None:
+            recordsForRow = {}
+            for element in graph.elements:
+                key = tuple(complete.subset(element.graph).minimal().values())
+                recordsForRow[element.name] = records[element.name].get(key)
+            return complete.expanded(recordsForRow)
+        else:
+            return complete
 
     def extractDatasetRef(self, row: sqlalchemy.engine.RowProxy,
-                          dataId: Optional[DataCoordinate] = None) -> DatasetRef:
+                          dataId: Optional[DataCoordinate] = None,
+                          records: Optional[Mapping[str, Mapping[tuple, DimensionRecord]]] = None,
+                          ) -> DatasetRef:
         """Extract a `DatasetRef` from a result row.
 
         Parameters
@@ -225,6 +275,11 @@ class Query(ABC):
         dataId : `DataCoordinate`
             Data ID to attach to the `DatasetRef`.  A minimal (i.e. base class)
             `DataCoordinate` is constructed from ``row`` if `None`.
+        records : `Mapping` [ `str`, `Mapping` [ `tuple`, `DimensionRecord` ] ]
+            Records to use to return an `ExpandedDataCoordinate`.  If provided,
+            outer keys must include all dimension element names in ``graph``,
+            and inner keys should be tuples of dimension primary key values
+            in the same order as ``element.graph.required``.
 
         Returns
         -------
@@ -235,7 +290,7 @@ class Query(ABC):
         datasetColumns = self.getDatasetColumns()
         assert datasetColumns is not None
         if dataId is None:
-            dataId = self.extractDataId(row, graph=datasetColumns.datasetType.dimensions)
+            dataId = self.extractDataId(row, graph=datasetColumns.datasetType.dimensions, records=records)
         runRecord = self._collections[row[datasetColumns.runKey]]
         return DatasetRef(datasetColumns.datasetType, dataId, id=row[datasetColumns.id], run=runRecord.name)
 
