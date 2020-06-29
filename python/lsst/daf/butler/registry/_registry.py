@@ -60,16 +60,9 @@ from ..core import (
     ExpandedDataCoordinate,
     StorageClassFactory,
 )
+from . import queries
 from ..core.utils import doImport, iterable, transactional
 from ._config import RegistryConfig
-from .queries import (
-    ChainedDatasetQueryResults,
-    DataCoordinateQueryResults,
-    DatasetQueryResults,
-    ParentDatasetQueryResults,
-    QueryBuilder,
-    QuerySummary,
-)
 from ._collectionType import CollectionType
 from ._exceptions import ConflictingDefinitionError, InconsistentDataIdError, OrphanedRecordError
 from .wildcards import CategorizedWildcard, CollectionQuery, CollectionSearch, Ellipsis
@@ -1019,7 +1012,7 @@ class Registry:
                                  flattenChains=flattenChains, includeChains=includeChains):
             yield record.name
 
-    def makeQueryBuilder(self, summary: QuerySummary) -> QueryBuilder:
+    def makeQueryBuilder(self, summary: queries.QuerySummary) -> queries.QueryBuilder:
         """Return a `QueryBuilder` instance capable of constructing and
         managing more complex queries than those obtainable via `Registry`
         interfaces.
@@ -1030,13 +1023,13 @@ class Registry:
 
         Parameters
         ----------
-        summary : `QuerySummary`
+        summary : `queries.QuerySummary`
             Object describing and categorizing the full set of dimensions that
             will be included in the query.
 
         Returns
         -------
-        builder : `QueryBuilder`
+        builder : `queries.QueryBuilder`
             Object that can be used to construct and perform advanced queries.
         """
         return QueryBuilder(summary=summary,
@@ -1051,7 +1044,7 @@ class Registry:
                       where: Optional[str] = None,
                       deduplicate: bool = False,
                       components: Optional[bool] = None,
-                      **kwargs: Any) -> DatasetQueryResults:
+                      **kwargs: Any) -> queries.DatasetQueryResults:
         """Query for and iterate over dataset references matching user-provided
         criteria.
 
@@ -1175,14 +1168,15 @@ class Registry:
                     where=where,
                     deduplicate=deduplicate
                 )
-                if isinstance(parentResults, ParentDatasetQueryResults):
+                if isinstance(parentResults, queries.ParentDatasetQueryResults):
                     chain.append(
                         parentResults.withComponents(componentNames)
                     )
                 else:
                     # Should only happen if we know there would be no results.
-                    assert isinstance(parentResults, ChainedDatasetQueryResults) and not parentResults._chain
-            return ChainedDatasetQueryResults(chain)
+                    assert isinstance(parentResults, queries.ChainedDatasetQueryResults) \
+                        and not parentResults._chain
+            return queries.ChainedDatasetQueryResults(chain)
         # If we get here, there's no need to recurse (or we are already
         # recursing; there can only ever be one level of recursion).
 
@@ -1192,7 +1186,7 @@ class Registry:
         if dimensions is not None:
             requestedDimensionNames.update(self.dimensions.extract(dimensions).names)
         # Construct the summary structure needed to construct a QueryBuilder.
-        summary = QuerySummary(
+        summary = queries.QuerySummary(
             requested=DimensionGraph(self.dimensions, names=requestedDimensionNames),
             dataId=standardizedDataId,
             expression=where,
@@ -1204,9 +1198,9 @@ class Registry:
         # actually wildcard expressions, and we've asked for deduplication,
         # this will raise TypeError for us.
         if not builder.joinDataset(datasetType, collections, isResult=True, deduplicate=deduplicate):
-            return ChainedDatasetQueryResults(())
+            return queries.ChainedDatasetQueryResults(())
         query = builder.finish()
-        return ParentDatasetQueryResults(self._db, query, self._dimensions, components=[None])
+        return queries.ParentDatasetQueryResults(self._db, query, components=[None])
 
     def queryDataIds(self, dimensions: Union[Iterable[Union[Dimension, str]], Dimension, str], *,
                      dataId: Optional[DataId] = None,
@@ -1214,7 +1208,7 @@ class Registry:
                      collections: Any = None,
                      where: Optional[str] = None,
                      components: Optional[bool] = None,
-                     **kwargs: Any) -> DataCoordinateQueryResults:
+                     **kwargs: Any) -> queries.DataCoordinateQueryResults:
         """Query for data IDs matching user-provided criteria.
 
         Parameters
@@ -1290,7 +1284,7 @@ class Registry:
             # below).
             collections = CollectionQuery.fromExpression(collections)
 
-        summary = QuerySummary(
+        summary = queries.QuerySummary(
             requested=DimensionGraph(self.dimensions, names=queryDimensionNames),
             dataId=standardizedDataId,
             expression=where,
@@ -1299,7 +1293,7 @@ class Registry:
         for datasetType in standardizedDatasetTypes:
             builder.joinDataset(datasetType, collections, isResult=False)
         query = builder.finish()
-        return DataCoordinateQueryResults(self._db, query, self._dimensions)
+        return queries.DataCoordinateQueryResults(self._db, query)
 
     def queryDimensionRecords(self, element: Union[DimensionElement, str], *,
                               dataId: Optional[DataId] = None,
