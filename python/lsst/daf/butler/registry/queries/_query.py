@@ -34,6 +34,7 @@ from typing import (
     Mapping,
     Optional,
     Tuple,
+    TYPE_CHECKING,
 )
 
 import sqlalchemy
@@ -55,7 +56,10 @@ from ...core import (
     SimpleQuery,
 )
 from ..interfaces import Database
-from ._structs import DatasetQueryColumns, QueryColumns, RegistryManagers
+from ._structs import DatasetQueryColumns, QueryColumns, QuerySummary, RegistryManagers
+
+if TYPE_CHECKING:
+    from ._builder import QueryBuilder
 
 
 class Query(ABC):
@@ -324,8 +328,9 @@ class Query(ABC):
     @contextmanager
     def materialize(self, db: Database) -> Iterator[MaterializedQuery]:
         # TODO: docs
-        table = db.makeTemporaryTable(self._makeTableSpec())
-        db.insert(table, select=self.sql(), names=table.fields.names)
+        spec = self._makeTableSpec()
+        table = db.makeTemporaryTable(spec)
+        db.insert(table, select=self.sql, names=spec.fields.names)
         yield MaterializedQuery(table=table,
                                 spatial=self.spatial,
                                 datasetType=self.datasetType,
@@ -333,12 +338,17 @@ class Query(ABC):
                                 graph=self.graph,
                                 whereRegion=self.whereRegion,
                                 managers=self.managers)
+        db.dropTemporaryTable(table)
 
     @abstractmethod
     def subset(self, *, graph: Optional[DimensionGraph] = None,
                datasets: bool = True,
                unique: bool = False) -> Query:
         # TODO: docs
+        raise NotImplementedError()
+
+    @abstractmethod
+    def makeBuilder(self, summary: Optional[QuerySummary] = None) -> QueryBuilder:
         raise NotImplementedError()
 
 
@@ -438,6 +448,15 @@ class DirectQuery(Query):
             managers=self.managers,
         )
 
+    def makeBuilder(self, summary: Optional[QuerySummary] = None) -> QueryBuilder:
+        from ._builder import QueryBuilder
+        if summary is None:
+            summary = QuerySummary(self.graph, whereRegion=self.whereRegion)
+        builder = QueryBuilder(summary, managers=self.managers)
+        builder.joinTable(self.sql.alias(), dimensions=self.graph.dimensions,
+                          datasets=self.getDatasetColumns())
+        return builder
+
 
 class MaterializedQuery(Query):
     """A `Query` implementation that represents query results saved in a
@@ -522,3 +541,11 @@ class MaterializedQuery(Query):
             whereRegion=self.whereRegion,
             managers=self.managers,
         )
+
+    def makeBuilder(self, summary: Optional[QuerySummary] = None) -> QueryBuilder:
+        from ._builder import QueryBuilder
+        if summary is None:
+            summary = QuerySummary(self.graph, whereRegion=self.whereRegion)
+        builder = QueryBuilder(summary, managers=self.managers)
+        builder.joinTable(self._table, dimensions=self.graph.dimensions, datasets=self.getDatasetColumns())
+        return builder

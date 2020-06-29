@@ -239,12 +239,12 @@ class QueryBuilder:
         self.joinTable(subquery, datasetType.dimensions.required)
         return True
 
-    def joinTable(self, table: sqlalchemy.sql.FromClause, dimensions: NamedValueSet[Dimension]) -> None:
+    def joinTable(self, table: sqlalchemy.sql.FromClause, dimensions: NamedValueSet[Dimension], *,
+                  datasets: Optional[DatasetQueryColumns] = None) -> None:
         """Join an arbitrary table to the query via dimension relationships.
 
         External calls to this method should only be necessary for tables whose
-        records represent neither dataset nor dimension elements (i.e.
-        extensions to the standard `Registry` schema).
+        records represent neither datasets nor dimension elements.
 
         Parameters
         ----------
@@ -255,9 +255,14 @@ class QueryBuilder:
             The dimensions that relate this table to others that may be in the
             query.  The table must have columns with the names of the
             dimensions.
+        TODO
         """
         joinOn = self.startJoin(table, dimensions, dimensions.names)
         self.finishJoin(table, joinOn)
+        if datasets is not None:
+            assert self._columns.datasets is None, \
+                "At most one result dataset type can be returned by a query."
+            self._columns.datasets = datasets
 
     def startJoin(self, table: sqlalchemy.sql.FromClause, dimensions: Iterable[Dimension],
                   columnNames: Iterable[str]
