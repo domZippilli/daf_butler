@@ -54,12 +54,8 @@ from ...core import (
     REGION_FIELD_SPEC,
     SimpleQuery,
 )
-from ..interfaces import (
-    CollectionManager,
-    Database,
-    DatasetRecordStorageManager,
-)
-from ._structs import DatasetQueryColumns, QueryColumns
+from ..interfaces import Database
+from ._structs import DatasetQueryColumns, QueryColumns, RegistryManagers
 
 
 class Query(ABC):
@@ -77,10 +73,6 @@ class Query(ABC):
         Object describing the dimensions included in the query.
     whereRegion : `lsst.sphgeom.Region`, optional
         Region that all region columns in all returned rows must overlap.
-    columns : `QueryColumns`
-        Columns that are referenced in the query in any clause.
-    collections : `CollectionsManager`,
-        Manager object for collection tables.
     TODO
 
     Notes
@@ -96,12 +88,11 @@ class Query(ABC):
     def __init__(self, *,
                  graph: DimensionGraph,
                  whereRegion: Optional[Region],
-                 collections: CollectionManager,
-                 datasets: DatasetRecordStorageManager):
+                 managers: RegistryManagers,
+                 ):
         self.graph = graph
         self.whereRegion = whereRegion
-        self._collections = collections
-        self._datasets = datasets
+        self.managers = managers
 
     @abstractmethod
     def isUnique(self) -> bool:
@@ -291,7 +282,7 @@ class Query(ABC):
         assert datasetColumns is not None
         if dataId is None:
             dataId = self.extractDataId(row, graph=datasetColumns.datasetType.dimensions, records=records)
-        runRecord = self._collections[row[datasetColumns.runKey]]
+        runRecord = self.managers.collections[row[datasetColumns.runKey]]
         return DatasetRef(datasetColumns.datasetType, dataId, id=row[datasetColumns.id], run=runRecord.name)
 
     def _makeTableSpec(self, constraints: bool = False) -> ddl.TableSpec:
@@ -306,8 +297,8 @@ class Query(ABC):
             spec.fields.add(field)
         datasetColumns = self.getDatasetColumns()
         if datasetColumns is not None:
-            self._datasets.addDatasetForeignKey(spec, primaryKey=unique, constraint=constraints)
-            self._collections.addRunForeignKey(spec, nullable=False, constraint=constraints)
+            self.managers.datasets.addDatasetForeignKey(spec, primaryKey=unique, constraint=constraints)
+            self.managers.collections.addRunForeignKey(spec, nullable=False, constraint=constraints)
         return spec
 
     def _makeSubsetQueryColumns(self, *, graph: Optional[DimensionGraph] = None,
@@ -341,9 +332,7 @@ class Query(ABC):
                                 isUnique=self.isUnique(),
                                 graph=self.graph,
                                 whereRegion=self.whereRegion,
-                                collections=self._collections,
-                                datasets=self._datasets)
-        db.dropTemporaryTable(db)
+                                managers=self.managers)
 
     @abstractmethod
     def subset(self, *, graph: Optional[DimensionGraph] = None,
@@ -373,8 +362,6 @@ class DirectQuery(Query):
         Region that all region columns in all returned rows must overlap.
     columns : `QueryColumns`
         Columns that are referenced in the query in any clause.
-    collections : `CollectionsManager`,
-        Manager object for collection tables.
     TODO
     """
     def __init__(self, *,
@@ -383,10 +370,8 @@ class DirectQuery(Query):
                  uniqueness: DirectQueryUniqueness,
                  graph: DimensionGraph,
                  whereRegion: Optional[Region],
-                 collections: CollectionManager,
-                 datasets: DatasetRecordStorageManager):
-        super().__init__(graph=graph, whereRegion=whereRegion,
-                         collections=collections, datasets=datasets)
+                 managers: RegistryManagers):
+        super().__init__(graph=graph, whereRegion=whereRegion, managers=managers)
         assert not simpleQuery.columns, "Columns should always be set on a copy in .sql"
         self._simpleQuery = simpleQuery
         self._columns = columns
@@ -417,7 +402,7 @@ class DirectQuery(Query):
         return DatasetQueryColumns(
             datasetType=base.datasetType,
             id=base.id.label("dataset_id"),
-            runKey=base.runKey.label(self._collections.getRunForeignKeyName()),
+            runKey=base.runKey.label(self.managers.collections.getRunForeignKeyName()),
         )
 
     @property
@@ -450,8 +435,7 @@ class DirectQuery(Query):
             uniqueness=DirectQueryUniqueness.NEEDS_DISTINCT if unique else DirectQueryUniqueness.NOT_UNIQUE,
             graph=graph,
             whereRegion=self.whereRegion,
-            collections=self._collections,
-            datasets=self._datasets,
+            managers=self.managers,
         )
 
 
@@ -462,16 +446,7 @@ class MaterializedQuery(Query):
     `MaterializedQuery` instances should not be constructed directly; use
     `Query.materialize()` instead.
 
-    Parameters
-    ----------
-    table : `sqlalchemy.schema.Table`
-        SQLAlchemy table object.
-    graph : `DimensionGraph`
-        Object describing the dimensions included in the query.
-    region : `lsst.sphgeom.Region`, optional
-        Region that all region columns in all returned rows must overlap.
-    collections : `CollectionsManager`,
-        Manager object for collection tables.
+    TODO
     """
     def __init__(self, *,
                  table: sqlalchemy.schema.Table,
@@ -480,9 +455,8 @@ class MaterializedQuery(Query):
                  isUnique: bool,
                  graph: DimensionGraph,
                  whereRegion: Optional[Region],
-                 collections: CollectionManager,
-                 datasets: DatasetRecordStorageManager):
-        super().__init__(graph=graph, whereRegion=whereRegion, collections=collections, datasets=datasets)
+                 managers: RegistryManagers):
+        super().__init__(graph=graph, whereRegion=whereRegion, managers=managers)
         self._table = table
         self._spatial = tuple(spatial)
         self._datasetType = datasetType
@@ -516,7 +490,7 @@ class MaterializedQuery(Query):
             return DatasetQueryColumns(
                 datasetType=self._datasetType,
                 id=self._table.columns["dataset_id"],
-                runKey=self._table.columns[self._collections.getRunForeignKeyName()],
+                runKey=self._table.columns[self.managers.collections.getRunForeignKeyName()],
             )
         else:
             return None
@@ -546,6 +520,5 @@ class MaterializedQuery(Query):
             uniqueness=DirectQueryUniqueness.NEEDS_DISTINCT if unique else DirectQueryUniqueness.NOT_UNIQUE,
             graph=graph,
             whereRegion=self.whereRegion,
-            collections=self._collections,
-            datasets=self._datasets,
+            managers=self.managers,
         )

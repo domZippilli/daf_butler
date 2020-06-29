@@ -1032,10 +1032,14 @@ class Registry:
         builder : `queries.QueryBuilder`
             Object that can be used to construct and perform advanced queries.
         """
-        return QueryBuilder(summary=summary,
-                            collections=self._collections,
-                            dimensions=self._dimensions,
-                            datasets=self._datasets)
+        return queries.QueryBuilder(
+            summary,
+            queries.RegistryManagers(
+                collections=self._collections,
+                dimensions=self._dimensions,
+                datasets=self._datasets
+            )
+        )
 
     def queryDatasets(self, datasetType: Any, *,
                       collections: Any,

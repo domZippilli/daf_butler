@@ -20,7 +20,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import annotations
 
-__all__ = ["QuerySummary"]  # other classes here are local to subpackage
+__all__ = ["QuerySummary", "RegistryManagers"]  # other classes here are local to subpackage
 
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, Union
@@ -40,6 +40,11 @@ from ...core import (
     NamedValueSet,
     SkyPixDimension,
     Timespan,
+)
+from ..interfaces import (
+    CollectionManager,
+    DatasetRecordStorageManager,
+    DimensionRecordStorageManager,
 )
 # We're not trying to add typing to the lex/yacc parser code, so MyPy
 # doesn't know about some of these imports.
@@ -323,3 +328,10 @@ class QueryColumns:
         # database's perspective this is entirely arbitrary, because the query
         # guarantees they all have equal values.
         return self.keys[dimension][-1]
+
+
+@dataclass
+class RegistryManagers:
+    collections: CollectionManager
+    datasets: DatasetRecordStorageManager
+    dimensions: DimensionRecordStorageManager

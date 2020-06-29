@@ -22,7 +22,7 @@ from __future__ import annotations
 
 __all__ = ("QueryBuilder",)
 
-from typing import Any, Iterable, List, Optional, TYPE_CHECKING
+from typing import Any, Iterable, List, Optional
 
 import sqlalchemy.sql
 
@@ -36,13 +36,10 @@ from ...core import (
     SimpleQuery,
 )
 
-from ._structs import QuerySummary, QueryColumns, DatasetQueryColumns
+from ._structs import QuerySummary, QueryColumns, DatasetQueryColumns, RegistryManagers
 from .expressions import ClauseVisitor
 from ._query import DirectQuery, DirectQueryUniqueness
 from ..wildcards import CollectionSearch, CollectionQuery
-
-if TYPE_CHECKING:
-    from ..interfaces import CollectionManager, DimensionRecordStorageManager, DatasetRecordStorageManager
 
 
 class QueryBuilder:
@@ -53,26 +50,15 @@ class QueryBuilder:
     ----------
     summary : `QuerySummary`
         Struct organizing the dimensions involved in the query.
-    collections : `CollectionManager`
-        Manager object for collection tables.
-    dimensions : `DimensionRecordStorageManager`
-        Manager for storage backend objects that abstract access to dimension
-        tables.
-    datasets : `DatasetRegistryStorage`
-        Storage backend object that abstracts access to dataset tables.
+    TODO
     """
 
-    def __init__(self, summary: QuerySummary, *,
-                 collections: CollectionManager,
-                 dimensions: DimensionRecordStorageManager,
-                 datasets: DatasetRecordStorageManager):
+    def __init__(self, summary: QuerySummary, managers: RegistryManagers):
         self.summary = summary
-        self._collections = collections
-        self._dimensions = dimensions
-        self._datasets = datasets
         self._simpleQuery = SimpleQuery()
         self._elements: NamedKeyDict[DimensionElement, sqlalchemy.sql.FromClause] = NamedKeyDict()
         self._columns = QueryColumns()
+        self._managers = managers
 
     def hasDimensionKey(self, dimension: Dimension) -> bool:
         """Return `True` if the given dimension's primary key column has
@@ -99,7 +85,7 @@ class QueryBuilder:
             associated with a database table (see `DimensionElement.hasTable`).
         """
         assert element not in self._elements, "Element already included in query."
-        storage = self._dimensions[element]
+        storage = self._managers.dimensions[element]
         fromClause = storage.join(
             self,
             regions=self._columns.regions if element in self.summary.spatial else None,
@@ -153,17 +139,18 @@ class QueryBuilder:
             collections = CollectionSearch.fromExpression(collections)
         else:
             collections = CollectionQuery.fromExpression(collections)
-        datasetRecordStorage = self._datasets.find(datasetType.name)
+        datasetRecordStorage = self._managers.datasets.find(datasetType.name)
         if datasetRecordStorage is None:
             # Unrecognized dataset type means no results.  It might be better
             # to raise here, but this is consistent with previous behavior,
             # which is expected by QuantumGraph generation code in pipe_base.
             return False
         subsubqueries = []
-        runKeyName = self._collections.getRunForeignKeyName()
+        runKeyName = self._managers.collections.getRunForeignKeyName()
         baseColumnNames = {"id", runKeyName} if isResult else set()
         baseColumnNames.update(datasetType.dimensions.required.names)
-        for rank, collectionRecord in enumerate(collections.iter(self._collections, datasetType=datasetType)):
+        for rank, collectionRecord in enumerate(collections.iter(self._managers.collections,
+                                                                 datasetType=datasetType)):
             ssq = datasetRecordStorage.select(collection=collectionRecord,
                                               dataId=SimpleQuery.Select,
                                               id=SimpleQuery.Select if isResult else None,
@@ -420,5 +407,4 @@ class QueryBuilder:
                            whereRegion=self.summary.whereRegion,
                            simpleQuery=self._simpleQuery,
                            columns=self._columns,
-                           collections=self._collections,
-                           datasets=self._datasets)
+                           managers=self._managers)
