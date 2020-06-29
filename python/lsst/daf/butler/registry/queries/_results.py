@@ -31,6 +31,7 @@ from abc import abstractmethod
 from contextlib import contextmanager, ExitStack
 import itertools
 from typing import (
+    Any,
     Callable,
     ContextManager,
     Generic,
@@ -47,7 +48,6 @@ import sqlalchemy
 
 from ...core import (
     CompleteDataCoordinate,
-    DataCoordinate,
     DataCoordinateIterable,
     DatasetRef,
     DatasetType,
@@ -56,7 +56,7 @@ from ...core import (
     ExpandedDataCoordinate,
     SimpleQuery,
 )
-from ..interfaces import Database, DimensionRecordStorageManager
+from ..interfaces import Database
 from ._query import Query
 
 
@@ -84,16 +84,15 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
     not use type annotations can ignore this entire paragraph.
     """
 
-    def __init__(self, db: Database, query: Query, dimensions: DimensionRecordStorageManager, *,
+    def __init__(self, db: Database, query: Query, *,
                  records: Optional[Mapping[str, Mapping[tuple, DimensionRecord]]] = None):
         self._db = db
         self._query = query
-        self._dimensions = dimensions
         self._records = records
         assert query.datasetType is None, \
             "Query used to initialize data coordinate results should not have any datasets."
 
-    __slots__ = ("_db", "_query", "_dimensions", "_records")
+    __slots__ = ("_db", "_query", "_records")
 
     def __iter__(self) -> Iterator[D]:
         return (self._query.extractDataId(row, records=self._records)  # type: ignore
@@ -110,8 +109,7 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
     @contextmanager
     def materialize(self) -> Iterator[DataCoordinateQueryResults[D]]:
         with self._query.materialize(self._db) as materialized:
-            yield DataCoordinateQueryResults(self._db, materialized, self._dimensions,
-                                             records=self._records)
+            yield DataCoordinateQueryResults(self._db, materialized, records=self._records)
 
     def expanded(self) -> DataCoordinateQueryResults[ExpandedDataCoordinate]:
         if self._records is None:
@@ -120,9 +118,9 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
                 subset = self.subset(graph=element.graph, unique=True)
                 records[element.name] = {
                     tuple(record.dataId.values()): record
-                    for record in self._dimensions[element].fetch(subset)
+                    for record in self._query.managers.dimensions[element].fetch(subset)
                 }
-            return DataCoordinateQueryResults(self._db, self._query, self._dimensions, records=records)
+            return DataCoordinateQueryResults(self._db, self._query, records=records)
         else:
             return self  # type: ignore
 
@@ -142,7 +140,6 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
         return DataCoordinateQueryResults(
             self._db,
             self._query.subset(graph=graph, datasets=False, unique=unique),
-            self._dimensions,
             records=records,
         )
 
@@ -155,6 +152,31 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
                 for dimension in self.graph.required
             ])
         )
+
+    def findDatasets(self, datasetType: DatasetType, collections: Any, *,
+                     deduplicate: bool = True) -> ParentDatasetQueryResults:
+        # TODO: allow dataset type name to be passed here; probably involves
+        # moving component handling down into managers.
+        if datasetType.dimensions != self.graph:
+            raise ValueError(f"findDatasets requires that the dataset type have the same dimensions as "
+                             f"the DataCoordinateQueryResult used as input to the search, but "
+                             f"{datasetType.name} has dimensions {datasetType.dimensions}, while the input "
+                             f"dimensions are {self.graph}.")
+        builder = self._query.makeBuilder()
+        if datasetType.isComponent():
+            # We were given a true DatasetType instance, but it's a component.
+            parentName, componentName = datasetType.nameAndComponent()
+            storage = self._query.managers.datasets.find(parentName)
+            if storage is None:
+                raise KeyError(f"Parent DatasetType '{parentName}' could not be found.")
+            datasetType = storage.datasetType
+            components = [componentName]
+        else:
+            components = [None]
+        builder.joinDataset(datasetType, collections=collections, deduplicate=deduplicate)
+        query = builder.finish()
+        return ParentDatasetQueryResults(db=self._db, query=query, components=components,
+                                         records=self._records)
 
 
 class DatasetQueryResults(Iterable[DatasetRef]):
@@ -170,16 +192,15 @@ class DatasetQueryResults(Iterable[DatasetRef]):
 
 class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
 
-    def __init__(self, db: Database, query: Query, dimensions: DimensionRecordStorageManager, *,
+    def __init__(self, db: Database, query: Query, *,
                  components: Sequence[Optional[str]],
                  records: Optional[Mapping[str, Mapping[tuple, DimensionRecord]]] = None):
         self._db = db
         self._query = query
-        self._dimensions = dimensions
         self._components = components
         self._records = records
         assert query.datasetType is not None, \
-            "Query used to initialize data coordinate results must have a dataset."
+            "Query used to initialize dataset results must have a dataset."
         assert query.datasetType.dimensions == query.graph
 
     __slots__ = ("_db", "_query", "_dimensions", "_components", "_records")
@@ -199,7 +220,7 @@ class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
     @contextmanager
     def materialize(self) -> Iterator[ParentDatasetQueryResults[D]]:
         with self._query.materialize(self._db) as materialized:
-            yield ParentDatasetQueryResults(self._db, materialized, self._dimensions,
+            yield ParentDatasetQueryResults(self._db, materialized,
                                             components=self._components,
                                             records=self._records)
 
@@ -213,18 +234,17 @@ class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
         return DataCoordinateQueryResults(
             self._db,
             self._query.subset(graph=self.parentDatasetType.dimensions, datasets=False, unique=False),
-            self._dimensions,
             records=self._records,
         )
 
     def withComponents(self, components: Sequence[Optional[str]]) -> ParentDatasetQueryResults:
-        return ParentDatasetQueryResults(self._db, self._query, self._dimensions, records=self._records,
+        return ParentDatasetQueryResults(self._db, self._query, records=self._records,
                                          components=components)
 
     def expanded(self) -> ParentDatasetQueryResults[ExpandedDataCoordinate]:
         if self._records is None:
             records = self.dataIds.expanded()._records
-            return ParentDatasetQueryResults(self._db, self._query, self._dimensions, records=records,
+            return ParentDatasetQueryResults(self._db, self._query, records=records,
                                              components=self._components)
         else:
             return self  # type: ignore
