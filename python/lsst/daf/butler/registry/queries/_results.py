@@ -157,7 +157,7 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
                      deduplicate: bool = True) -> ParentDatasetQueryResults:
         # TODO: allow dataset type name to be passed here; probably involves
         # moving component handling down into managers.
-        if datasetType.dimensions != self.graph:
+        if not datasetType.dimensions.issubset(self.graph):
             raise ValueError(f"findDatasets requires that the dataset type have the same dimensions as "
                              f"the DataCoordinateQueryResult used as input to the search, but "
                              f"{datasetType.name} has dimensions {datasetType.dimensions}, while the input "
