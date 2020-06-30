@@ -39,8 +39,8 @@ from ...core import (
     DatasetType,
     ddl,
     ExpandedDataCoordinate,
+    SimpleQuery,
 )
-from ..simpleQuery import SimpleQuery
 
 if TYPE_CHECKING:
     from ...core import DimensionUniverse
