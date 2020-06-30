@@ -318,9 +318,10 @@ class Query(ABC):
         for dimension in graph.dimensions:
             col = self.getDimensionColumn(dimension.name)
             columns.keys[dimension] = [col]
-        for element in self.spatial:
-            col = self.getRegionColumn(element.name)
-            columns.regions[element] = col
+        if not unique:
+            for element in self.spatial:
+                col = self.getRegionColumn(element.name)
+                columns.regions[element] = col
         if not datasets and self.getDatasetColumns() is not None:
             columns.datasets = self.getDatasetColumns()
         return graph, columns
@@ -444,7 +445,7 @@ class DirectQuery(Query):
             columns=columns,
             uniqueness=DirectQueryUniqueness.NEEDS_DISTINCT if unique else DirectQueryUniqueness.NOT_UNIQUE,
             graph=graph,
-            whereRegion=self.whereRegion,
+            whereRegion=self.whereRegion if not unique else None,
             managers=self.managers,
         )
 
@@ -538,7 +539,7 @@ class MaterializedQuery(Query):
             columns=columns,
             uniqueness=DirectQueryUniqueness.NEEDS_DISTINCT if unique else DirectQueryUniqueness.NOT_UNIQUE,
             graph=graph,
-            whereRegion=self.whereRegion,
+            whereRegion=self.whereRegion if not unique else None,
             managers=self.managers,
         )
 
