@@ -388,15 +388,18 @@ class QueryBuilder:
                 assert element not in self.summary.dataId.graph.elements
                 self._simpleQuery.where.append(intervalInQuery.overlaps(givenInterval, ops=sqlalchemy.sql))
 
-    def finish(self) -> DirectQuery:
+    def finish(self, joinMissing: bool = True) -> DirectQuery:
         """Finish query constructing, returning a new `Query` instance.
 
-        This automatically joins any missing dimension element tables
-        (according to the categorization of the `QuerySummary` the builder was
-        constructed with).
-
-        This consumes the `QueryBuilder`; no other methods should be called
-        after this one.
+        Parameters
+        ----------
+        joinMissing : `bool`, optional
+            If `True` (default), automatically join any missing dimension
+            element tables (according to the categorization of the
+            `QuerySummary` the builder was constructed with).  `False` should
+            only be passed if the caller can independently guarantee that all
+            dimension relationships are already captured in non-dimension
+            tables that have been manually included in the query.
 
         Returns
         -------
@@ -404,8 +407,14 @@ class QueryBuilder:
             A `Query` object that can be executed (possibly multiple times
             with different bind parameter values) and used to interpret result
             rows.
+
+        Notes
+        -----
+        This consumes the `QueryBuilder`; no other methods should be called
+        after this one.
         """
-        self._joinMissingDimensionElements()
+        if joinMissing:
+            self._joinMissingDimensionElements()
         self._addWhereClause()
         return DirectQuery(graph=self.summary.requested,
                            uniqueness=DirectQueryUniqueness.NOT_UNIQUE,

@@ -174,7 +174,7 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
         else:
             components = [None]
         builder.joinDataset(datasetType, collections=collections, deduplicate=deduplicate)
-        query = builder.finish()
+        query = builder.finish(joinMissing=False)
         return ParentDatasetQueryResults(db=self._db, query=query, components=components,
                                          records=self._records)
 
