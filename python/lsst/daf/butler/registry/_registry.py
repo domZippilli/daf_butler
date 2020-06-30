@@ -94,9 +94,9 @@ class Registry:
         Registry configuration
     """
 
-    defaultConfigFile = None
-    """Path to configuration defaults. Relative to $DAF_BUTLER_DIR/config or
-    absolute path. Can be None if no defaults specified.
+    defaultConfigFile: Optional[str] = None
+    """Path to configuration defaults. Relative to ``$DAF_BUTLER_DIR/config``
+    or absolute path. Can be `None` if no defaults specified.
     """
 
     @classmethod
