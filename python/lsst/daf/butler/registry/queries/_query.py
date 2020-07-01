@@ -322,7 +322,7 @@ class Query(ABC):
             for element in self.spatial:
                 col = self.getRegionColumn(element.name)
                 columns.regions[element] = col
-        if not datasets and self.getDatasetColumns() is not None:
+        if datasets and self.getDatasetColumns() is not None:
             columns.datasets = self.getDatasetColumns()
         return graph, columns
 
