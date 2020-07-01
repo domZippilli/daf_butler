@@ -179,18 +179,22 @@ class DataCoordinateQueryResults(DataCoordinateIterable[D]):
                                          records=self._records)
 
 
-class DatasetQueryResults(Iterable[DatasetRef]):
+class DatasetQueryResults(Iterable[DatasetRef], Generic[D]):
 
     @abstractmethod
-    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults]:
+    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults[D]]:
         raise NotImplementedError()
 
     @abstractmethod
-    def materialize(self) -> ContextManager[DatasetQueryResults]:
+    def materialize(self) -> ContextManager[DatasetQueryResults[D]]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def expanded(self) -> DatasetQueryResults[ExpandedDataCoordinate]:
         raise NotImplementedError()
 
 
-class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
+class ParentDatasetQueryResults(DatasetQueryResults[D]):
 
     def __init__(self, db: Database, query: Query, *,
                  components: Sequence[Optional[str]],
@@ -214,7 +218,7 @@ class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
                 else:
                     yield parentRef.makeComponentRef(component)
 
-    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults]:
+    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults[D]]:
         yield self
 
     @contextmanager
@@ -237,7 +241,7 @@ class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
             records=self._records,
         )
 
-    def withComponents(self, components: Sequence[Optional[str]]) -> ParentDatasetQueryResults:
+    def withComponents(self, components: Sequence[Optional[str]]) -> ParentDatasetQueryResults[D]:
         return ParentDatasetQueryResults(self._db, self._query, records=self._records,
                                          components=components)
 
@@ -250,9 +254,9 @@ class ParentDatasetQueryResults(DatasetQueryResults, Generic[D]):
             return self  # type: ignore
 
 
-class ChainedDatasetQueryResults(DatasetQueryResults):
+class ChainedDatasetQueryResults(DatasetQueryResults[D]):
 
-    def __init__(self, chain: Sequence[ParentDatasetQueryResults]):
+    def __init__(self, chain: Sequence[ParentDatasetQueryResults[D]]):
         self._chain = chain
 
     __slots__ = ("_chain",)
@@ -260,7 +264,7 @@ class ChainedDatasetQueryResults(DatasetQueryResults):
     def __iter__(self) -> Iterator[DatasetRef]:
         return itertools.chain.from_iterable(self._chain)
 
-    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults]:
+    def byParentDatasetType(self) -> Iterator[ParentDatasetQueryResults[D]]:
         return iter(self._chain)
 
     @contextmanager
@@ -269,3 +273,6 @@ class ChainedDatasetQueryResults(DatasetQueryResults):
             yield ChainedDatasetQueryResults(
                 [stack.enter_context(r.materialize()) for r in self._chain]
             )
+
+    def expanded(self) -> ChainedDatasetQueryResults[ExpandedDataCoordinate]:
+        return ChainedDatasetQueryResults([r.expanded() for r in self._chain])
