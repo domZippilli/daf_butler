@@ -153,3 +153,5 @@ storageClasses:
     pytype: matplotlib.figure.Figure
   MetricValue:
     pytype: lsst.verify.Measurement
+  BrightStarStamps:
+    pytype: lsst.meas.algorithms.brightStarStamps.BrightStarStamps

@@ -48,3 +48,4 @@ MetricValue: lsst.daf.butler.formatters.yaml.YamlFormatter
 BrighterFatterKernel: lsst.daf.butler.formatters.pickle.PickleFormatter
 StructuredDataDict: lsst.daf.butler.formatters.yaml.YamlFormatter
 Filter: lsst.obs.base.formatters.filter.FilterFormatter
+BrightStarStamps: lsst.obs.base.formatters.fitsGeneric.FitsGenericFormatter
