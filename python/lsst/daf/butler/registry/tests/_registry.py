@@ -405,11 +405,11 @@ class RegistryTests(ABC):
         self.assertEqual(
             dataIds,
             DataCoordinateSet(
-                parentType.dimensions,
                 {
                     DataCoordinate.standardize(instrument="Cam1", detector=d, graph=parentType.dimensions)
                     for d in (1, 2, 3)
                 },
+                parentType.dimensions,
                 dtype=CompleteDataCoordinate,
             )
         )
