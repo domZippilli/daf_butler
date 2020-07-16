@@ -71,7 +71,7 @@ ChainedDatastore
 ================
 
 This datastore enables multiple other datastores to be combined into one.
-The datastore will be sent to every datastore in the chain and success is reported if any of the datastores accepts the dataset.
+The dataset will be sent to every datastore in the chain, and success is reported if any of the datastores accepts the dataset.
 When a dataset is retrieved each datastore is asked for the dataset in turn and the first match is sufficient.
 This allows an in-memory datastore to be combined with a file-based datastore to enable simple in-memory retrieval for a dataset that has been persisted to disk.
 
